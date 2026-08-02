@@ -3,7 +3,7 @@ import { recommendLineup, playerScore, validateLineup } from './lineup'
 import { simulateMatch } from './sim'
 import type { CareerState, Club, MatchResult, NewsItem, Player, Standing, Tactic, TrainingFocus } from './types'
 
-const saveKey = 'touchline-career-v2'
+const saveKey = 'touchline-career-v3'
 
 export function loadCareer(): CareerState | undefined {
   try {
@@ -248,26 +248,35 @@ function applyResultsToStandings(standings: Standing[], results: MatchResult[]) 
 function applyTraining(club: Club, focus: TrainingFocus, tactic: Tactic): Club {
   const deltas: Record<TrainingFocus, Partial<Record<keyof Player, number>>> = {
     Recovery: { fitness: 9, morale: 2 },
-    Finishing: { attack: 1.2, technique: 0.6, fitness: -2 },
-    Structure: { defense: 1.1, morale: 1, fitness: 1 },
-    Pressing: { stamina: 1, pace: 0.6, fitness: -3 },
-    Conditioning: { stamina: 1.4, fitness: 3, morale: -1 },
+    Finishing: { finishing: 1.2, composure: 0.7, firstTouch: 0.5, fitness: -2 },
+    Structure: { passing: 0.8, decisions: 0.8, tackling: 0.8, marking: 0.6, morale: 1, fitness: 1 },
+    Pressing: { stamina: 1, workRate: 0.8, acceleration: 0.6, pace: 0.4, fitness: -3 },
+    Conditioning: { stamina: 1.4, strength: 0.8, acceleration: 0.4, pace: 0.3, fitness: 3, morale: -1 },
   }
   const selected = deltas[focus]
   const fatigueTax = tactic.pressing > 74 ? -1.4 : tactic.tempo > 72 ? -0.8 : 0
 
   return {
     ...club,
-    squad: club.squad.map((player) => ({
-      ...player,
-      attack: clamp(Math.round(player.attack + (selected.attack ?? 0)), 18, 99),
-      defense: clamp(Math.round(player.defense + (selected.defense ?? 0)), 18, 99),
-      technique: clamp(Math.round(player.technique + (selected.technique ?? 0)), 18, 99),
-      pace: clamp(Math.round(player.pace + (selected.pace ?? 0)), 18, 99),
-      stamina: clamp(Math.round(player.stamina + (selected.stamina ?? 0)), 18, 99),
-      morale: clamp(Math.round(player.morale + (selected.morale ?? 0)), 0, 100),
-      fitness: clamp(Math.round(player.fitness + (selected.fitness ?? 0) + fatigueTax), 0, 100),
-    })),
+    squad: club.squad.map((player) =>
+      syncAggregateRatings({
+        ...player,
+        finishing: clamp(Math.round(player.finishing + (selected.finishing ?? 0)), 18, 99),
+        passing: clamp(Math.round(player.passing + (selected.passing ?? 0)), 18, 99),
+        composure: clamp(Math.round(player.composure + (selected.composure ?? 0)), 18, 99),
+        firstTouch: clamp(Math.round(player.firstTouch + (selected.firstTouch ?? 0)), 18, 99),
+        tackling: clamp(Math.round(player.tackling + (selected.tackling ?? 0)), 18, 99),
+        marking: clamp(Math.round(player.marking + (selected.marking ?? 0)), 18, 99),
+        decisions: clamp(Math.round(player.decisions + (selected.decisions ?? 0)), 18, 99),
+        stamina: clamp(Math.round(player.stamina + (selected.stamina ?? 0)), 18, 99),
+        workRate: clamp(Math.round(player.workRate + (selected.workRate ?? 0)), 18, 99),
+        acceleration: clamp(Math.round(player.acceleration + (selected.acceleration ?? 0)), 18, 99),
+        strength: clamp(Math.round(player.strength + (selected.strength ?? 0)), 18, 99),
+        pace: clamp(Math.round(player.pace + (selected.pace ?? 0)), 18, 99),
+        morale: clamp(Math.round(player.morale + (selected.morale ?? 0)), 0, 100),
+        fitness: clamp(Math.round(player.fitness + (selected.fitness ?? 0) + fatigueTax), 0, 100),
+      }),
+    ),
   }
 }
 
@@ -423,15 +432,40 @@ function developPlayer(player: Player): Player {
   const ageDrag = player.age >= 31 ? -1.2 : 0
   const growth = clamp(youthGrowth + ageDrag, -2, 3)
 
-  return {
+  return syncAggregateRatings({
     ...player,
     age: player.age + 1,
-    attack: clamp(Math.round(player.attack + growth), 18, 99),
-    defense: clamp(Math.round(player.defense + growth), 18, 99),
-    technique: clamp(Math.round(player.technique + growth), 18, 99),
+    finishing: clamp(Math.round(player.finishing + growth), 18, 99),
+    passing: clamp(Math.round(player.passing + growth), 18, 99),
+    dribbling: clamp(Math.round(player.dribbling + growth), 18, 99),
+    firstTouch: clamp(Math.round(player.firstTouch + growth), 18, 99),
+    tackling: clamp(Math.round(player.tackling + growth), 18, 99),
+    marking: clamp(Math.round(player.marking + growth), 18, 99),
+    heading: clamp(Math.round(player.heading + growth), 18, 99),
+    crossing: clamp(Math.round(player.crossing + growth), 18, 99),
+    setPieces: clamp(Math.round(player.setPieces + growth), 18, 99),
+    acceleration: clamp(Math.round(player.acceleration + (player.age >= 31 ? -1.2 : growth * 0.4)), 18, 99),
+    strength: clamp(Math.round(player.strength + growth), 18, 99),
+    vision: clamp(Math.round(player.vision + growth), 18, 99),
+    decisions: clamp(Math.round(player.decisions + growth), 18, 99),
+    composure: clamp(Math.round(player.composure + growth), 18, 99),
+    workRate: clamp(Math.round(player.workRate + growth), 18, 99),
+    handling: clamp(Math.round(player.handling + growth), 18, 99),
+    reflexes: clamp(Math.round(player.reflexes + (player.age >= 31 ? -0.8 : growth)), 18, 99),
+    oneOnOnes: clamp(Math.round(player.oneOnOnes + growth), 18, 99),
+    positioning: clamp(Math.round(player.positioning + growth), 18, 99),
     pace: clamp(Math.round(player.pace + (player.age >= 31 ? -2 : growth * 0.4)), 18, 99),
     stamina: clamp(Math.round(player.stamina + (player.age >= 31 ? -1 : growth * 0.3)), 18, 99),
     morale: clamp(Math.round(player.morale * 0.82 + 11), 0, 100),
     fitness: clamp(Math.round(player.fitness * 0.75 + 22), 0, 100),
+  })
+}
+
+function syncAggregateRatings(player: Player): Player {
+  return {
+    ...player,
+    attack: Math.round((player.finishing + player.dribbling + player.pace) / 3),
+    defense: Math.round((player.tackling + player.marking + player.heading + player.strength) / 4),
+    technique: Math.round((player.passing + player.firstTouch + player.dribbling + player.crossing + player.setPieces) / 5),
   }
 }

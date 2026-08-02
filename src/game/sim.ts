@@ -1,5 +1,5 @@
 import { clamp, createAiTactic, mulberry32, randomRange } from './data'
-import { getLineupPlayers, playerScore } from './lineup'
+import { getLineupPlayers, playerOverall, playerScore } from './lineup'
 import type {
   CareerState,
   Club,
@@ -213,7 +213,11 @@ function simulatePossession({
 
   if (buildup < -7) {
     attackLog.buildUpFails += 1
-    const presser = pickWeighted([...defending.forwards, ...defending.midfielders], random, (player) => player.stamina + player.defense)
+    const presser = pickWeighted(
+      [...defending.forwards, ...defending.midfielders],
+      random,
+      (player) => player.workRate + player.stamina + player.decisions,
+    )
 
     if (buildup < -14) {
       defendLog.pressWins += 1
@@ -293,7 +297,11 @@ function simulatePossession({
 
   if (midfieldDuel < -5) {
     defendLog.midfieldWins += 1
-    const winner = pickWeighted(defending.midfielders, random, (player) => player.defense + player.stamina + player.technique)
+    const winner = pickWeighted(
+      defending.midfielders,
+      random,
+      (player) => player.tackling + player.stamina + player.decisions,
+    )
     nudgeRating(playerRatings, winner.id, 0.1)
     if (minute > 70 && attacking.fatigueRisk > 30) {
       attackLog.lateFatigueLosses += 1
@@ -343,8 +351,8 @@ function simulatePossession({
   if (behindRisk > 0.72) {
     attackLog.ballsBehind += 1
     attackLog.lineBreaks += 1
-    const passer = pickWeighted(attacking.midfielders, random, (player) => player.technique + player.attack)
-    const runner = pickWeighted(attacking.forwards, random, (player) => player.pace + player.attack)
+    const passer = pickWeighted(attacking.midfielders, random, (player) => player.passing + player.vision + player.decisions)
+    const runner = pickWeighted(attacking.forwards, random, (player) => player.acceleration + player.pace + player.dribbling)
     nudgeRating(playerRatings, passer.id, 0.12)
     nudgeRating(playerRatings, runner.id, 0.1)
     events.push({
@@ -380,7 +388,7 @@ function simulatePossession({
   const entryVolumeDrag = Math.max(0, attackLog.finalThirdEntries - 16) * 1.4
 
   if (finalThirdDuel < -4) {
-    const defender = pickWeighted(defending.defenders, random, (player) => player.defense + player.pace)
+    const defender = pickWeighted(defending.defenders, random, (player) => player.tackling + player.marking + player.pace)
     nudgeRating(playerRatings, defender.id, 0.12)
     if (random() < 0.16) {
       events.push({
@@ -409,7 +417,11 @@ function simulatePossession({
 
   if (finalThirdDuel < 17 + leadDrag * 4 + entryVolumeDrag) {
     if (random() < 0.16) {
-      const carrier = pickWeighted([...attacking.midfielders, ...attacking.forwards], random, (player) => player.technique + player.pace)
+      const carrier = pickWeighted(
+        [...attacking.midfielders, ...attacking.forwards],
+        random,
+        (player) => player.dribbling + player.firstTouch + player.pace,
+      )
       events.push({
         minute,
         type: 'pressure',
@@ -457,7 +469,7 @@ function simulatePossession({
 
   const shotVolumeDrag = Math.max(0, attackLog.shots - 12) * 2
   if (boxDuel < 19 + leadDrag * 5 + shotVolumeDrag) {
-    const defender = pickWeighted(defending.defenders, random, (player) => player.defense + player.stamina)
+    const defender = pickWeighted(defending.defenders, random, (player) => player.tackling + player.heading + player.strength)
     nudgeRating(playerRatings, defender.id, 0.14)
     if (random() < 0.22) {
       events.push({
@@ -512,7 +524,11 @@ function resolveShot(
   forcedShooter?: Player,
 ): MatchEvent {
   const shooter = forcedShooter ?? pickAttacker(attacking, random, chanceType === 'counter' ? 'final-third' : 'box')
-  const creator = pickWeighted([...attacking.midfielders, ...attacking.forwards], random, (player) => player.technique + player.attack)
+  const creator = pickWeighted(
+    [...attacking.midfielders, ...attacking.forwards],
+    random,
+    (player) => player.passing + player.vision + player.decisions,
+  )
   const attackingLog = ledger[attacking.club.id]
   const defendingLog = ledger[defending.club.id]
   const chanceBoost = chanceType === 'clear' ? 0.085 : chanceType === 'behind-line' ? 0.065 : chanceType === 'counter' ? 0.038 : 0
@@ -520,17 +536,17 @@ function resolveShot(
   const xg = clamp(
     0.031 +
       chanceBoost +
-      (shooter.attack - defending.boxDefense) * 0.0017 +
-      (creator.technique - 58) * 0.0009 +
+      (shooter.finishing - defending.boxDefense) * 0.0017 +
+      (creator.passing - 58) * 0.0009 +
       attacking.tactic.tempo * 0.0005 -
       pressurePenalty +
       randomRange(random, -0.018, 0.026),
     0.018,
     0.32,
   )
-  const onTargetProbability = clamp(0.21 + xg * 0.66 + shooter.technique * 0.0015 + shooter.morale * 0.0007, 0.18, 0.6)
+  const onTargetProbability = clamp(0.21 + xg * 0.66 + shooter.composure * 0.0015 + shooter.morale * 0.0007, 0.18, 0.6)
   const onTarget = random() < onTargetProbability
-  const finishingModifier = clamp(0.92 + shooter.attack * 0.003 - defending.keeperSkill * 0.0019, 0.7, 1.18)
+  const finishingModifier = clamp(0.92 + shooter.finishing * 0.003 - defending.keeperSkill * 0.0019, 0.7, 1.18)
   const goalProbability = clamp((xg * finishingModifier) / onTargetProbability, 0.025, 0.72)
   const goal = onTarget && random() < goalProbability
 
@@ -564,7 +580,6 @@ function buildProfile(club: Club, tactic: Tactic, captainId?: string, starterIds
   const captain = captainId ? lineup.find((player) => player.id === captainId) : undefined
   const morale = average(lineup.map((player) => player.morale))
   const fitness = average(lineup.map((player) => player.fitness))
-  const stamina = average(lineup.map((player) => player.stamina))
   const captainLift = captain ? captain.leadership * 0.075 + (captain.personality === 'Leader' ? 2.5 : 0) : 0
   const highPressLoad = Math.max(0, tactic.pressing - 62) * 0.18 + Math.max(0, tactic.tempo - 64) * 0.12
   const volatileCount = lineup.filter((player) => player.personality === 'Volatile').length
@@ -578,27 +593,103 @@ function buildProfile(club: Club, tactic: Tactic, captainId?: string, starterIds
     midfielders,
     forwards,
     buildUp:
-      average([...defenders, ...midfielders, keeper].map((player) => player.technique * 0.72 + player.morale * 0.1 + player.form * 0.08)) +
+      average(
+        [...defenders, ...midfielders, keeper].map(
+          (player) =>
+            player.passing * 0.38 +
+            player.firstTouch * 0.22 +
+            player.vision * 0.18 +
+            player.decisions * 0.14 +
+            player.composure * 0.08 +
+            player.morale * 0.1 +
+            player.form * 0.08,
+        ),
+      ) +
       captainLift * 0.22,
     pressResistance:
-      average(lineup.map((player) => player.technique * 0.52 + player.stamina * 0.2 + player.morale * 0.14)) +
+      average(
+        lineup.map(
+          (player) =>
+            player.firstTouch * 0.32 +
+            player.composure * 0.22 +
+            player.strength * 0.14 +
+            player.stamina * 0.14 +
+            player.decisions * 0.1 +
+            player.dribbling * 0.08 +
+            player.morale * 0.14,
+        ),
+      ) +
       (tactic.mentality === 'Measured' ? 4 : 0),
     midfieldControl:
-      average(midfielders.map((player) => player.technique * 0.46 + player.stamina * 0.24 + player.defense * 0.16 + player.attack * 0.12)) +
+      average(
+        midfielders.map(
+          (player) =>
+            player.passing * 0.26 +
+            player.vision * 0.2 +
+            player.decisions * 0.18 +
+            player.tackling * 0.15 +
+            player.stamina * 0.12 +
+            player.workRate * 0.09,
+        ),
+      ) +
       morale * 0.05 +
       captainLift * 0.16,
     lineBreaking:
-      average([...midfielders, ...forwards].map((player) => player.technique * 0.32 + player.pace * 0.28 + player.attack * 0.28)) +
+      average(
+        [...midfielders, ...forwards].map(
+          (player) => player.passing * 0.25 + player.vision * 0.2 + player.dribbling * 0.22 + player.pace * 0.18 + player.firstTouch * 0.15,
+        ),
+      ) +
       tactic.tempo * 0.09,
     boxThreat:
-      average(forwards.map((player) => player.attack * 0.48 + player.technique * 0.26 + player.pace * 0.16 + player.morale * 0.08)) +
+      average(
+        forwards.map(
+          (player) =>
+            player.finishing * 0.4 +
+            player.composure * 0.18 +
+            player.dribbling * 0.18 +
+            player.firstTouch * 0.12 +
+            player.pace * 0.07 +
+            player.heading * 0.05 +
+            player.morale * 0.08,
+        ),
+      ) +
       mentalityEdge(tactic),
     boxDefense:
-      average([...defenders, keeper].map((player) => player.defense * 0.54 + player.pace * 0.16 + player.stamina * 0.1 + player.morale * 0.08)) -
+      average(
+        [...defenders, keeper].map(
+          (player) =>
+            player.tackling * 0.3 +
+            player.marking * 0.25 +
+            player.heading * 0.16 +
+            player.strength * 0.14 +
+            player.pace * 0.08 +
+            player.positioning * 0.07 +
+            player.morale * 0.08,
+        ),
+      ) -
       Math.max(0, tactic.defensiveLine - 68) * 0.13,
-    press: clamp(stamina * 0.28 + tactic.pressing * 0.62 + captainLift * 0.3 - highPressLoad * 0.35, 20, 94),
-    recovery: average([...defenders, ...midfielders].map((player) => player.pace * 0.34 + player.stamina * 0.32 + player.defense * 0.18)),
-    keeperSkill: keeper.defense * 0.68 + keeper.technique * 0.18 + keeper.morale * 0.08 + keeper.form * 0.06,
+    press:
+      clamp(
+        average(lineup.map((player) => player.stamina * 0.25 + player.workRate * 0.25 + player.decisions * 0.15)) * 0.28 +
+          tactic.pressing * 0.62 +
+          captainLift * 0.3 -
+          highPressLoad * 0.35,
+        20,
+        94,
+      ),
+    recovery: average(
+      [...defenders, ...midfielders].map(
+        (player) => player.acceleration * 0.24 + player.pace * 0.24 + player.stamina * 0.25 + player.strength * 0.14 + player.tackling * 0.13,
+      ),
+    ),
+    keeperSkill:
+      keeper.handling * 0.42 +
+      keeper.reflexes * 0.3 +
+      keeper.positioning * 0.2 +
+      keeper.oneOnOnes * 0.08 +
+      keeper.composure * 0.05 +
+      keeper.form * 0.06,
     disciplineRisk: clamp(tactic.pressing * 0.42 + volatileCount * 5 + (tactic.mentality === 'Relentless' ? 9 : 0) - morale * 0.12, 5, 85),
     fatigueRisk: clamp(highPressLoad + tactic.pressing * 0.24 + tactic.tempo * 0.16 - fitness * 0.3, 0, 70),
     captainLift,
@@ -674,7 +765,7 @@ function seedRatings(home: TeamProfile, away: TeamProfile) {
 }
 
 function baseRating(player: Player) {
-  return 5.85 + playerScore(player) * 0.012
+  return 5.85 + playerOverall(player) * 0.012
 }
 
 function createLedger(home: TeamProfile, away: TeamProfile): MatchLedger {
@@ -873,7 +964,7 @@ function movementPull({
   intent: PlayerIntent
 }) {
   if (intent === 'press') return { x: clamp(profile.tactic.pressing / 230, 0.18, 0.42), y: 0.32 }
-  if (intent === 'run') return { x: 0.08 + player.pace * 0.001, y: 0.12 }
+  if (intent === 'run') return { x: 0.08 + (player.pace + player.acceleration) * 0.0005, y: 0.12 }
   if (intent === 'shoot') return { x: 0.18, y: 0.26 }
   if (intent === 'support') return { x: attacking ? 0.12 : 0.08, y: 0.18 }
   if (intent === 'mark') return { x: phase === 'box' ? 0.18 : 0.1, y: 0.2 }
@@ -955,7 +1046,7 @@ function dangerousTurnoverChance(attacking: TeamProfile, defending: TeamProfile,
 
 function highLineBehindRisk(attacking: TeamProfile, defending: TeamProfile, random: () => number) {
   const highLine = Math.max(0, defending.tactic.defensiveLine - 62) * 0.016
-  const paceGap = (average(attacking.forwards.map((player) => player.pace)) - defending.recovery) * 0.006
+  const paceGap = (average(attacking.forwards.map((player) => player.pace + player.acceleration)) * 0.5 - defending.recovery) * 0.006
   const directness = Math.max(0, attacking.tactic.tempo - 58) * 0.006
   return 0.18 + highLine + paceGap + directness + randomRange(random, -0.16, 0.18)
 }
@@ -1023,9 +1114,17 @@ function shotText({
 
 function pickAttacker(profile: TeamProfile, random: () => number, phase: Phase) {
   if (phase === 'box') {
-    return pickWeighted(profile.forwards, random, (player) => player.attack * 1.2 + player.technique + player.morale * 0.25)
+    return pickWeighted(
+      profile.forwards,
+      random,
+      (player) => player.finishing * 1.2 + player.composure + player.dribbling + player.morale * 0.25,
+    )
   }
-  return pickWeighted([...profile.forwards, ...profile.midfielders], random, (player) => player.attack + player.pace + player.technique * 0.4)
+  return pickWeighted(
+    [...profile.forwards, ...profile.midfielders],
+    random,
+    (player) => player.dribbling + player.pace + player.passing * 0.4,
+  )
 }
 
 function pickWeighted(players: Player[], random: () => number, score: (player: Player) => number) {

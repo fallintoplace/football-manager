@@ -28,6 +28,25 @@ export type Player = {
   name: string
   age: number
   position: PlayerPosition
+  finishing: number
+  passing: number
+  dribbling: number
+  firstTouch: number
+  tackling: number
+  marking: number
+  heading: number
+  crossing: number
+  setPieces: number
+  acceleration: number
+  strength: number
+  vision: number
+  decisions: number
+  composure: number
+  workRate: number
+  handling: number
+  reflexes: number
+  oneOnOnes: number
+  positioning: number
   attack: number
   defense: number
   technique: number

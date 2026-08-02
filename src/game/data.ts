@@ -11,7 +11,7 @@ import type {
   Tactic,
 } from './types'
 import { recommendLineup } from './lineup'
-import { premierLeagueClubSeeds } from './premierLeagueData'
+import { premierLeagueClubSeeds, type PremierLeaguePlayerSeed } from './premierLeagueData'
 
 export const defaultTactic: Tactic = {
   formation: '4-2-3-1',
@@ -146,13 +146,13 @@ function createClub(input: {
   colors: [string, string]
   strength: number
   style: Mentality
-  players: Array<{ name: string; position: PlayerPosition }>
+  players: PremierLeaguePlayerSeed[]
   index: number
   seed: number
 }): Club {
   const random = mulberry32(input.seed + input.index * 997)
   const squad = input.players.map((player, playerIndex) =>
-    createPlayer(input.id, player.name, player.position, input.strength, playerIndex, random),
+    createPlayer(input.id, player, input.strength, playerIndex, random),
   )
 
   return {
@@ -173,46 +173,189 @@ function createClub(input: {
 
 function createPlayer(
   clubId: string,
-  name: string,
-  position: PlayerPosition,
+  seed: PremierLeaguePlayerSeed,
   teamStrength: number,
   playerIndex: number,
   random: () => number,
 ): Player {
-  const base = teamStrength + randomRange(random, -12, 9)
-  const age = Math.round(randomRange(random, 18, 33))
-  const potential = clamp(base + randomRange(random, age < 23 ? 8 : -4, age < 24 ? 22 : 8), 42, 96)
+  const base = clamp(seed.ability + randomRange(random, -2, 2), Math.max(48, teamStrength - 16), 96)
+  const age = seed.age
+  const potential = clamp(base + randomRange(random, age < 23 ? 8 : age < 26 ? 2 : 0, age < 23 ? 17 : age < 26 ? 9 : 4), base, 96)
   const personality = personalities[Math.floor(random() * personalities.length)]
-  const wage = Math.round((base * 0.075 + random() * 1.4) * 10) / 10
-  const value = Math.round((base * 0.32 + potential * 0.25 + random() * 8) * 10) / 10
-
-  const positionBoost = {
-    GK: { attack: -22, defense: 21, technique: 0, pace: -4, stamina: -6 },
-    DEF: { attack: -9, defense: 13, technique: -2, pace: 1, stamina: 5 },
-    MID: { attack: 3, defense: 2, technique: 11, pace: 2, stamina: 8 },
-    FWD: { attack: 16, defense: -12, technique: 5, pace: 8, stamina: 0 },
-  }[position]
+  const positionBoost = positionAttributes(seed.position)
+  const rating = (attribute: keyof Player, fallback = 0) =>
+    clamp(Math.round(base + (positionBoost[attribute] ?? fallback) + randomRange(random, -3, 3)), 18, 99)
+  const finishing = rating('finishing')
+  const passing = rating('passing')
+  const dribbling = rating('dribbling')
+  const firstTouch = rating('firstTouch')
+  const tackling = rating('tackling')
+  const marking = rating('marking')
+  const heading = rating('heading')
+  const crossing = rating('crossing')
+  const setPieces = rating('setPieces')
+  const acceleration = rating('acceleration')
+  const strength = rating('strength')
+  const vision = rating('vision')
+  const decisions = rating('decisions')
+  const composure = rating('composure')
+  const workRate = rating('workRate')
+  const handling = rating('handling')
+  const reflexes = rating('reflexes')
+  const oneOnOnes = rating('oneOnOnes')
+  const positioning = rating('positioning')
+  const pace = clamp(Math.round((acceleration * 0.56 + rating('pace', positionBoost.pace ?? 0) * 0.44)), 18, 99)
+  const stamina = rating('stamina')
+  const value = Math.max(
+    2,
+    Math.round(
+      (Math.pow(Math.max(0, base - 45) / 50, 2) * 95 + potential * 0.18 + (age < 25 ? 10 : 0) + random() * 7) * 10,
+    ) / 10,
+  )
+  const wage = Math.round((value * 1.75 + base * 0.22 + random() * 18) * 10) / 10
 
   return {
-    id: `${clubId}-${position.toLowerCase()}-${playerIndex}`,
+    id: `${clubId}-${seed.position.toLowerCase()}-${playerIndex}`,
     clubId,
-    name,
+    name: seed.name,
     age,
-    position,
-    attack: clamp(Math.round(base + positionBoost.attack + randomRange(random, -8, 8)), 18, 96),
-    defense: clamp(Math.round(base + positionBoost.defense + randomRange(random, -8, 8)), 18, 96),
-    technique: clamp(Math.round(base + positionBoost.technique + randomRange(random, -8, 8)), 18, 96),
-    pace: clamp(Math.round(base + positionBoost.pace + randomRange(random, -9, 9)), 18, 96),
-    stamina: clamp(Math.round(base + positionBoost.stamina + randomRange(random, -8, 8)), 18, 96),
+    position: seed.position,
+    finishing,
+    passing,
+    dribbling,
+    firstTouch,
+    tackling,
+    marking,
+    heading,
+    crossing,
+    setPieces,
+    acceleration,
+    strength,
+    vision,
+    decisions,
+    composure,
+    workRate,
+    handling,
+    reflexes,
+    oneOnOnes,
+    positioning,
+    attack: averageRating([finishing, dribbling, pace]),
+    defense: averageRating([tackling, marking, heading, strength]),
+    technique: averageRating([passing, firstTouch, dribbling, crossing, setPieces]),
+    pace,
+    stamina,
     morale: clamp(Math.round(55 + randomRange(random, -9, 16)), 0, 100),
     fitness: clamp(Math.round(84 + randomRange(random, -7, 10)), 0, 100),
-    potential,
+    potential: Math.round(potential),
     leadership: clamp(Math.round(base + randomRange(random, -20, 18) + (personality === 'Leader' ? 18 : 0)), 18, 98),
-    form: clamp(Math.round(56 + randomRange(random, -12, 15)), 0, 100),
+    form: clamp(Math.round(seed.form + randomRange(random, -4, 4)), 0, 100),
     wage,
     value,
     personality,
   }
+}
+
+type PositionAttributeBoost = Partial<Record<keyof Player, number>>
+
+function positionAttributes(position: PlayerPosition): PositionAttributeBoost {
+  return {
+    GK: {
+      finishing: -18,
+      passing: -1,
+      dribbling: -8,
+      firstTouch: 1,
+      tackling: -4,
+      marking: 1,
+      heading: 3,
+      crossing: -8,
+      setPieces: -4,
+      acceleration: -4,
+      strength: 3,
+      vision: 3,
+      decisions: 5,
+      composure: 5,
+      workRate: 1,
+      handling: 9,
+      reflexes: 10,
+      oneOnOnes: 8,
+      positioning: 9,
+      pace: -5,
+      stamina: -4,
+    },
+    DEF: {
+      finishing: -18,
+      passing: 0,
+      dribbling: -5,
+      firstTouch: -1,
+      tackling: 8,
+      marking: 8,
+      heading: 7,
+      crossing: 1,
+      setPieces: -4,
+      acceleration: 2,
+      strength: 8,
+      vision: 1,
+      decisions: 5,
+      composure: 3,
+      workRate: 4,
+      handling: -20,
+      reflexes: -20,
+      oneOnOnes: -18,
+      positioning: -16,
+      pace: 1,
+      stamina: 5,
+    },
+    MID: {
+      finishing: 1,
+      passing: 8,
+      dribbling: 6,
+      firstTouch: 7,
+      tackling: -2,
+      marking: -5,
+      heading: -3,
+      crossing: 5,
+      setPieces: 3,
+      acceleration: 3,
+      strength: -1,
+      vision: 9,
+      decisions: 8,
+      composure: 4,
+      workRate: 6,
+      handling: -22,
+      reflexes: -22,
+      oneOnOnes: -20,
+      positioning: -18,
+      pace: 2,
+      stamina: 8,
+    },
+    FWD: {
+      finishing: 9,
+      passing: -1,
+      dribbling: 8,
+      firstTouch: 7,
+      tackling: -12,
+      marking: -16,
+      heading: 2,
+      crossing: 2,
+      setPieces: 0,
+      acceleration: 8,
+      strength: 3,
+      vision: 1,
+      decisions: 4,
+      composure: 8,
+      workRate: 1,
+      handling: -24,
+      reflexes: -24,
+      oneOnOnes: -22,
+      positioning: -20,
+      pace: 8,
+      stamina: 1,
+    },
+  }[position]
+}
+
+function averageRating(values: number[]) {
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
 }
 
 function stableShuffle(items: string[], seed: number): string[] {

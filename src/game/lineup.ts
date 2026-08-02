@@ -109,17 +109,96 @@ export function validateLineup(club: Club, tactic: Tactic, starterIds: string[])
   }
 }
 
-export function playerScore(player: Player) {
-  const roleScore =
+export function playerOverall(player: Player) {
+  const overall =
     player.position === 'GK'
-      ? player.defense * 0.76 + player.technique * 0.12 + player.leadership * 0.12
+      ? weighted(player, [
+          ['handling', 0.28],
+          ['reflexes', 0.24],
+          ['positioning', 0.2],
+          ['oneOnOnes', 0.14],
+          ['composure', 0.08],
+          ['passing', 0.06],
+        ])
       : player.position === 'DEF'
-        ? player.defense * 0.58 + player.pace * 0.18 + player.stamina * 0.14 + player.technique * 0.1
+        ? weighted(player, [
+            ['tackling', 0.22],
+            ['marking', 0.2],
+            ['heading', 0.12],
+            ['strength', 0.12],
+            ['pace', 0.1],
+            ['passing', 0.08],
+            ['decisions', 0.08],
+            ['composure', 0.08],
+          ])
         : player.position === 'MID'
-          ? player.technique * 0.42 + player.stamina * 0.24 + player.attack * 0.18 + player.defense * 0.16
-          : player.attack * 0.5 + player.pace * 0.22 + player.technique * 0.2 + player.stamina * 0.08
+          ? weighted(player, [
+              ['passing', 0.18],
+              ['vision', 0.15],
+              ['firstTouch', 0.14],
+              ['dribbling', 0.14],
+              ['decisions', 0.13],
+              ['stamina', 0.1],
+              ['workRate', 0.08],
+              ['finishing', 0.04],
+              ['acceleration', 0.04],
+            ])
+          : weighted(player, [
+              ['finishing', 0.24],
+              ['dribbling', 0.17],
+              ['firstTouch', 0.14],
+              ['pace', 0.12],
+              ['acceleration', 0.1],
+              ['composure', 0.1],
+              ['strength', 0.06],
+              ['passing', 0.04],
+              ['heading', 0.03],
+            ])
 
-  return roleScore + player.morale * 0.08 + player.fitness * 0.1 + player.form * 0.06
+  return clampRating(Math.round(overall), 1, 99)
+}
+
+export function playerScore(player: Player) {
+  return clampRating(
+    playerOverall(player) + (player.form - 50) * 0.08 + (player.fitness - 70) * 0.06 + (player.morale - 50) * 0.03,
+    1,
+    99,
+  )
+}
+
+export function playerAttributeSummary(player: Player) {
+  const attributes =
+    player.position === 'GK'
+      ? [
+          ['HAN', player.handling],
+          ['REF', player.reflexes],
+          ['POS', player.positioning],
+        ]
+      : player.position === 'DEF'
+        ? [
+            ['TAC', player.tackling],
+            ['MAR', player.marking],
+            ['HEA', player.heading],
+          ]
+        : player.position === 'MID'
+          ? [
+              ['PAS', player.passing],
+              ['VIS', player.vision],
+              ['DRI', player.dribbling],
+            ]
+          : [
+              ['FIN', player.finishing],
+              ['DRI', player.dribbling],
+              ['PAC', player.pace],
+            ]
+
+  return attributes.map(([label, value]) => `${label} ${value}`).join(' · ')
+}
+
+type PlayerAttribute = keyof Player
+
+function weighted(player: Player, attributes: Array<[PlayerAttribute, number]>) {
+  return attributes.reduce((total, [attribute, weight]) => total + Number(player[attribute]) * weight, 0)
 }
 
 function countPositions(players: Player[]): Record<PlayerPosition, number> {
@@ -135,4 +214,8 @@ function countPositions(players: Player[]): Record<PlayerPosition, number> {
 function average(values: number[]) {
   if (!values.length) return 0
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
+}
+
+function clampRating(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
 }

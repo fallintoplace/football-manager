@@ -43,7 +43,7 @@ import {
 } from './game/career'
 import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMatchday } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
-import { playerScore, validateLineup } from './game/lineup'
+import { playerAttributeSummary, playerOverall, playerScore, validateLineup } from './game/lineup'
 import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
 import type { CareerState, Club, Formation, MatchResult, Mentality, PlayerPosition, Tactic, TrainingFocus } from './game/types'
 
@@ -519,9 +519,9 @@ function PlayerPicker({
               <span className="player-role">{selected ? 'XI' : player.position}</span>
               <span className="player-main">
                 <strong>{player.name}</strong>
-                <small>{player.personality}</small>
+                <small>{player.personality} · {playerAttributeSummary(player)}</small>
               </span>
-              <span className="player-score">{Math.round(playerScore(player))}</span>
+              <span className="player-score" title="Overall rating">{Math.round(playerOverall(player))}</span>
               <span className="player-meter">
                 <b>Fit</b>
                 <i style={{ inlineSize: `${player.fitness}%` }} />
@@ -580,7 +580,9 @@ function SquadView({
               <tr>
                 <th>Player</th>
                 <th>Pos</th>
-                <th>Score</th>
+                <th>OVR</th>
+                <th>POT</th>
+                <th>Key attributes</th>
                 <th>Morale</th>
                 <th>Fit</th>
                 <th>Age</th>
@@ -599,7 +601,9 @@ function SquadView({
                       <span>€{player.value.toFixed(1)}m · €{player.wage.toFixed(1)}k/w</span>
                     </td>
                     <td>{player.position}</td>
-                    <td>{Math.round(playerScore(player))}</td>
+                    <td>{Math.round(playerOverall(player))}</td>
+                    <td>{Math.round(player.potential)}</td>
+                    <td className="attribute-summary">{playerAttributeSummary(player)}</td>
                     <td>
                       <InlineMeter value={player.morale} />
                     </td>

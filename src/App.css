@@ -608,7 +608,7 @@ button {
 
 .player-toggle-row {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) 42px 54px 54px;
+  grid-template-columns: 42px minmax(0, 1fr) 48px 54px 54px;
   align-items: center;
   gap: 10px;
   min-height: 54px;
@@ -753,7 +753,7 @@ button {
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  min-width: 980px;
 }
 
 .data-table th,
@@ -781,6 +781,13 @@ button {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.76rem;
+}
+
+.attribute-summary {
+  white-space: nowrap;
+  color: var(--club-primary) !important;
+  font-size: 0.78rem !important;
+  font-weight: 850;
 }
 
 .table-club {

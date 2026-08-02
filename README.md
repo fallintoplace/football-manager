@@ -15,11 +15,12 @@ A fast football management prototype focused on visible tactical consequences, s
 - Spatial replay trace with real starters, ball position, player intent, and phase-aware movement
 - Animated 2D canvas pitch on the match view
 - Captain selection, player form, morale, fitness, value, and wages
+- FIFA/Football Manager-style player model with 0–99 OVR, potential, and position-specific technical, mental, physical, defensive, attacking, and goalkeeper attributes
 - Local save/reset through browser storage
 - Season rollover after the fixture list completes
 - Analytics Lab with selected-club match, event, replay-frame, and player-rating aggregates
 
-The 2026/27 Premier League roster snapshot is pinned in `src/game/premierLeagueData.ts`. Player names and positions come from the Fantasy Premier League bootstrap feed captured on 2026-08-02; badge images use the API-Football crest CDN. Match events, player ratings, and tactical outcomes remain simulated so the local demo is deterministic and can feed the ClickHouse and Iceberg pipeline without live-match credentials.
+The 2026/27 Premier League roster snapshot is pinned in `src/game/premierLeagueData.ts`. Player names, positions, age, availability, and recent form inputs come from the Fantasy Premier League bootstrap feed captured on 2026-08-02; badge images use the API-Football crest CDN. OVR and potential are derived game ratings rather than official EA or Football Manager ratings. Match events, player ratings, and tactical outcomes remain simulated so the local demo is deterministic and can feed the ClickHouse and Iceberg pipeline without live-match credentials.
 
 ## Analytics Stack
 
