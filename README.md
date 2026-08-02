@@ -31,6 +31,8 @@ docker compose up --build
 
 The service listens on `http://localhost:8787`. The game still runs without the stack; the Analytics Lab will show an offline state until the service is available.
 
+ClickHouse 26.2 includes the embedded ClickStack UI. After the stack has match data, open `http://localhost:8123/clickstack` from the Analytics Lab or use the starter queries in `analytics/clickstack-queries.sql` to build timestamped xG, event, player-form, and replay-density charts over the football fact tables. The custom pitch heatmap remains in Touchline.
+
 ## Run
 
 ```bash

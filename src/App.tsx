@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Database,
   Dumbbell,
+  ExternalLink,
   Gauge,
   ListChecks,
   Play,
@@ -40,7 +41,7 @@ import {
   updateTactic,
   updateTraining,
 } from './game/career'
-import { buildAnalyticsPayload, fetchAnalyticsSummary, ingestMatchday } from './game/analytics'
+import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMatchday } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerScore, validateLineup } from './game/lineup'
 import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
@@ -933,7 +934,10 @@ function AnalyticsView({
             <p className="eyebrow">Analytics Lab</p>
             <h2>Touchline Data Room</h2>
           </div>
-          <Database size={22} />
+          <a className="secondary-action" href={clickhouseUiUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            <span>Open ClickStack</span>
+          </a>
         </div>
         <div className={`analytics-status ${status}`}>
           <span className="status-dot" />

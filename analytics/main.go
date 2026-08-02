@@ -332,6 +332,13 @@ func (s *Store) summary(ctx context.Context, clubID string) (AnalyticsSummary, e
 
 func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS touchline_clubs (
+			season UInt32,
+			club_id String,
+			name String,
+			short_name String,
+			ingested_at DateTime64(3) DEFAULT now64(3)
+		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (season, club_id)`,
 		`CREATE TABLE IF NOT EXISTS touchline_matches (
 			match_id String,
 			season UInt32,
@@ -411,6 +418,23 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 }
 
 func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPayload) error {
+	if len(payload.Clubs) > 0 {
+		clubs, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_clubs (
+			season, club_id, name, short_name
+		)`)
+		if err != nil {
+			return err
+		}
+		for _, club := range payload.Clubs {
+			if err := clubs.Append(payload.Season, club.ID, club.Name, club.ShortName); err != nil {
+				return err
+			}
+		}
+		if err := clubs.Send(); err != nil {
+			return err
+		}
+	}
+
 	matches, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_matches (
 		match_id, season, round, home_id, away_id, home_goals, away_goals, home_xg, away_xg,
 		home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_possession,

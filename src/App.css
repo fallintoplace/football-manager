@@ -291,6 +291,7 @@ button {
   font-weight: 900;
   border: 1px solid color-mix(in srgb, var(--club-primary), white 50%);
   background: color-mix(in srgb, var(--club-primary), white 92%);
+  text-decoration: none;
 }
 
 .fixture-line {

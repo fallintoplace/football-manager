@@ -37,6 +37,7 @@ export type AnalyticsSummary = {
 export type AnalyticsSyncStatus = 'unknown' | 'syncing' | 'online' | 'offline'
 
 const analyticsBaseUrl = import.meta.env.VITE_ANALYTICS_URL ?? 'http://localhost:8787'
+export const clickhouseUiUrl = import.meta.env.VITE_CLICKHOUSE_UI_URL ?? 'http://localhost:8123/clickstack'
 
 export function buildAnalyticsPayload(state: CareerState, results: MatchResult[]): AnalyticsMatchdayPayload {
   return {

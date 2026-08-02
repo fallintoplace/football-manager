@@ -35,7 +35,7 @@ services:
       tail -f /dev/null"
 
   clickhouse:
-    image: clickhouse/clickhouse-server
+    image: clickhouse/clickhouse-server:26.2
     ports:
       - "8123:8123"
       - "9002:9000"
