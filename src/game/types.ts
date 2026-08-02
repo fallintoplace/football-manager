@@ -189,3 +189,9 @@ export type CareerState = {
   news: NewsItem[]
   savedAt?: string
 }
+
+export type SeasonAnalyticsSnapshot = {
+  round: number
+  standings: Standing[]
+  players: Player[]
+}

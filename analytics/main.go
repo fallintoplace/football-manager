@@ -27,11 +27,14 @@ import (
 )
 
 type MatchdayPayload struct {
-	Season  int           `json:"season"`
-	Round   int           `json:"round"`
-	Clubs   []Club        `json:"clubs"`
-	Players []Player      `json:"players"`
-	Results []MatchResult `json:"results"`
+	RunID           string             `json:"runId"`
+	Season          int                `json:"season"`
+	Round           int                `json:"round"`
+	Clubs           []Club             `json:"clubs"`
+	Players         []Player           `json:"players"`
+	Standings       []StandingSnapshot `json:"standings"`
+	PlayerSnapshots []PlayerSnapshot   `json:"playerSnapshots"`
+	Results         []MatchResult      `json:"results"`
 }
 
 type Club struct {
@@ -45,6 +48,36 @@ type Player struct {
 	ClubID   string `json:"clubId"`
 	Name     string `json:"name"`
 	Position string `json:"position"`
+}
+
+type StandingSnapshot struct {
+	ClubID         string `json:"clubId"`
+	Rank           int    `json:"rank"`
+	Played         int    `json:"played"`
+	Won            int    `json:"won"`
+	Drawn          int    `json:"drawn"`
+	Lost           int    `json:"lost"`
+	GoalsFor       int    `json:"goalsFor"`
+	GoalsAgainst   int    `json:"goalsAgainst"`
+	GoalDifference int    `json:"goalDifference"`
+	Points         int    `json:"points"`
+	Form           string `json:"form"`
+}
+
+type PlayerSnapshot struct {
+	PlayerID      string  `json:"playerId"`
+	ClubID        string  `json:"clubId"`
+	PlayerName    string  `json:"playerName"`
+	Position      string  `json:"position"`
+	Age           int     `json:"age"`
+	Overall       int     `json:"overall"`
+	Potential     int     `json:"potential"`
+	Form          int     `json:"form"`
+	Morale        int     `json:"morale"`
+	Fitness       int     `json:"fitness"`
+	Value         float64 `json:"value"`
+	AverageRating float64 `json:"averageRating"`
+	Appeared      bool    `json:"appeared"`
 }
 
 type MatchResult struct {
@@ -229,7 +262,7 @@ func (s *Store) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := s.summary(r.Context(), clubID)
+	summary, err := s.summary(r.Context(), clubID, r.URL.Query().Get("run_id"))
 	if err != nil {
 		log.Printf("summary failed: %v", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "analytics store unavailable"})
@@ -251,34 +284,77 @@ func (s *Store) ingest(ctx context.Context, payload MatchdayPayload) error {
 		return err
 	}
 
+	clickHouseResults := make([]MatchResult, 0, len(payload.Results))
+	icebergResults := make([]MatchResult, 0, len(payload.Results))
 	for _, result := range payload.Results {
-		exists, err := s.hasMatch(ctx, result.FixtureID)
+		ingested, err := s.hasIngestLog(ctx, payload.RunID, result.FixtureID)
 		if err != nil {
 			return err
 		}
-		if exists {
-			return nil
+		if ingested {
+			continue
+		}
+		icebergResults = append(icebergResults, result)
+		exists, err := s.hasMatch(ctx, payload.RunID, result.FixtureID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			clickHouseResults = append(clickHouseResults, result)
 		}
 	}
+	if len(icebergResults) == 0 {
+		return nil
+	}
 
-	if err := insertClickHouse(ctx, s.clickhouse, payload); err != nil {
+	if len(clickHouseResults) > 0 {
+		clickHousePayload := payload
+		clickHousePayload.Results = clickHouseResults
+		if err := insertClickHouse(ctx, s.clickhouse, clickHousePayload); err != nil {
+			return err
+		}
+	}
+	icebergPayload := payload
+	icebergPayload.Results = icebergResults
+	if err := s.iceberg.append(ctx, icebergPayload); err != nil {
 		return err
 	}
-	if err := s.iceberg.append(ctx, payload); err != nil {
+	if err := s.markIngested(ctx, payload.RunID, icebergResults); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Store) hasMatch(ctx context.Context, matchID string) (bool, error) {
+func (s *Store) hasIngestLog(ctx context.Context, runID string, matchID string) (bool, error) {
 	var count uint64
-	if err := s.clickhouse.QueryRow(ctx, "SELECT count() FROM touchline_matches WHERE match_id = ?", matchID).Scan(&count); err != nil {
+	if err := s.clickhouse.QueryRow(ctx, "SELECT count() FROM touchline_ingest_log WHERE run_id = ? AND match_id = ?", runID, matchID).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil
 }
 
-func (s *Store) summary(ctx context.Context, clubID string) (AnalyticsSummary, error) {
+func (s *Store) hasMatch(ctx context.Context, runID string, matchID string) (bool, error) {
+	var count uint64
+	if err := s.clickhouse.QueryRow(ctx, "SELECT count() FROM touchline_matches WHERE run_id = ? AND match_id = ?", runID, matchID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) markIngested(ctx context.Context, runID string, results []MatchResult) error {
+	logBatch, err := s.clickhouse.PrepareBatch(ctx, `INSERT INTO touchline_ingest_log (run_id, match_id)`)
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		if err := logBatch.Append(runID, result.FixtureID); err != nil {
+			return err
+		}
+	}
+	return logBatch.Send()
+}
+
+func (s *Store) summary(ctx context.Context, clubID string, runID string) (AnalyticsSummary, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := ensureClickHouseSchema(ctx, s.clickhouse); err != nil {
@@ -289,29 +365,29 @@ func (s *Store) summary(ctx context.Context, clubID string) (AnalyticsSummary, e
 	if err := s.clickhouse.QueryRow(ctx, `
 		SELECT count(), coalesce(avg(home_xg + away_xg), 0), coalesce(avg(home_possession), 0)
 		FROM touchline_matches
-		WHERE home_id = ? OR away_id = ?`, clubID, clubID).Scan(&summary.Matches, &summary.AverageXG, &summary.AveragePossession); err != nil {
+		WHERE (home_id = ? OR away_id = ?) AND (? = '' OR run_id = ?)`, clubID, clubID, runID, runID).Scan(&summary.Matches, &summary.AverageXG, &summary.AveragePossession); err != nil {
 		return AnalyticsSummary{}, err
 	}
 	if err := s.clickhouse.QueryRow(ctx, `
 		SELECT count()
 		FROM touchline_match_events
-		WHERE match_id IN (SELECT match_id FROM touchline_matches WHERE home_id = ? OR away_id = ?)`, clubID, clubID).Scan(&summary.Events); err != nil {
+		WHERE match_id IN (SELECT match_id FROM touchline_matches WHERE (home_id = ? OR away_id = ?) AND (? = '' OR run_id = ?))`, clubID, clubID, runID, runID).Scan(&summary.Events); err != nil {
 		return AnalyticsSummary{}, err
 	}
 	if err := s.clickhouse.QueryRow(ctx, `
 		SELECT count()
 		FROM touchline_player_frames
-		WHERE match_id IN (SELECT match_id FROM touchline_matches WHERE home_id = ? OR away_id = ?)`, clubID, clubID).Scan(&summary.Frames); err != nil {
+		WHERE match_id IN (SELECT match_id FROM touchline_matches WHERE (home_id = ? OR away_id = ?) AND (? = '' OR run_id = ?))`, clubID, clubID, runID, runID).Scan(&summary.Frames); err != nil {
 		return AnalyticsSummary{}, err
 	}
 
 	rows, err := s.clickhouse.Query(ctx, `
 		SELECT player_id, any(player_name), count(), avg(rating)
 		FROM touchline_player_ratings
-		WHERE club_id = ?
+		WHERE club_id = ? AND (? = '' OR run_id = ?)
 		GROUP BY player_id
 		ORDER BY avg(rating) DESC
-		LIMIT 8`, clubID)
+		LIMIT 8`, clubID, runID, runID)
 	if err != nil {
 		return AnalyticsSummary{}, err
 	}
@@ -333,13 +409,15 @@ func (s *Store) summary(ctx context.Context, clubID string) (AnalyticsSummary, e
 func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS touchline_clubs (
+			run_id String,
 			season UInt32,
 			club_id String,
 			name String,
 			short_name String,
 			ingested_at DateTime64(3) DEFAULT now64(3)
-		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (season, club_id)`,
+		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, season, club_id)`,
 		`CREATE TABLE IF NOT EXISTS touchline_matches (
+			run_id String,
 			match_id String,
 			season UInt32,
 			round UInt32,
@@ -359,8 +437,9 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 			home_territory Float32,
 			result String,
 			ingested_at DateTime64(3) DEFAULT now64(3)
-		) ENGINE = MergeTree ORDER BY (season, round, match_id)`,
+		) ENGINE = MergeTree ORDER BY (run_id, season, round, match_id)`,
 		`CREATE TABLE IF NOT EXISTS touchline_match_events (
+			run_id String,
 			event_key String,
 			match_id String,
 			season UInt32,
@@ -373,8 +452,9 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 			text String,
 			xg Float32,
 			ingested_at DateTime64(3) DEFAULT now64(3)
-		) ENGINE = MergeTree ORDER BY (season, match_id, minute, event_key)`,
+		) ENGINE = MergeTree ORDER BY (run_id, season, match_id, minute, event_key)`,
 		`CREATE TABLE IF NOT EXISTS touchline_player_frames (
+			run_id String,
 			frame_key String,
 			match_id String,
 			season UInt32,
@@ -395,8 +475,9 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 			target_y Float32,
 			intent LowCardinality(String),
 			ingested_at DateTime64(3) DEFAULT now64(3)
-		) ENGINE = MergeTree ORDER BY (season, match_id, frame_index, player_id)`,
+		) ENGINE = MergeTree ORDER BY (run_id, season, match_id, frame_index, player_id)`,
 		`CREATE TABLE IF NOT EXISTS touchline_player_ratings (
+			run_id String,
 			rating_key String,
 			match_id String,
 			season UInt32,
@@ -407,7 +488,53 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 			rating Float32,
 			opponent_id String,
 			ingested_at DateTime64(3) DEFAULT now64(3)
-		) ENGINE = MergeTree ORDER BY (season, player_id, match_id)`,
+		) ENGINE = MergeTree ORDER BY (run_id, season, player_id, match_id)`,
+		`CREATE TABLE IF NOT EXISTS touchline_standings (
+			run_id String,
+			season UInt32,
+			round UInt32,
+			club_id String,
+			rank UInt32,
+			played UInt32,
+			won UInt32,
+			drawn UInt32,
+			lost UInt32,
+			goals_for Int32,
+			goals_against Int32,
+			goal_difference Int32,
+			points UInt32,
+			form String,
+			ingested_at DateTime64(3) DEFAULT now64(3)
+		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, season, round, club_id)`,
+		`CREATE TABLE IF NOT EXISTS touchline_player_snapshots (
+			run_id String,
+			season UInt32,
+			round UInt32,
+			player_id String,
+			club_id String,
+			player_name String,
+			position LowCardinality(String),
+			age UInt32,
+			overall UInt32,
+			potential UInt32,
+			form UInt32,
+			morale UInt32,
+			fitness UInt32,
+			value Float32,
+			average_rating Float32,
+			appeared Bool,
+			ingested_at DateTime64(3) DEFAULT now64(3)
+		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, season, round, player_id)`,
+		`CREATE TABLE IF NOT EXISTS touchline_ingest_log (
+			run_id String,
+			match_id String,
+			ingested_at DateTime64(3) DEFAULT now64(3)
+		) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, match_id)`,
+		`ALTER TABLE touchline_clubs ADD COLUMN IF NOT EXISTS run_id String DEFAULT ''`,
+		`ALTER TABLE touchline_matches ADD COLUMN IF NOT EXISTS run_id String DEFAULT ''`,
+		`ALTER TABLE touchline_match_events ADD COLUMN IF NOT EXISTS run_id String DEFAULT ''`,
+		`ALTER TABLE touchline_player_frames ADD COLUMN IF NOT EXISTS run_id String DEFAULT ''`,
+		`ALTER TABLE touchline_player_ratings ADD COLUMN IF NOT EXISTS run_id String DEFAULT ''`,
 	}
 	for _, statement := range statements {
 		if err := conn.Exec(ctx, statement); err != nil {
@@ -420,13 +547,13 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPayload) error {
 	if len(payload.Clubs) > 0 {
 		clubs, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_clubs (
-			season, club_id, name, short_name
+			run_id, season, club_id, name, short_name
 		)`)
 		if err != nil {
 			return err
 		}
 		for _, club := range payload.Clubs {
-			if err := clubs.Append(payload.Season, club.ID, club.Name, club.ShortName); err != nil {
+			if err := clubs.Append(payload.RunID, payload.Season, club.ID, club.Name, club.ShortName); err != nil {
 				return err
 			}
 		}
@@ -435,8 +562,48 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 		}
 	}
 
+	standings, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_standings (
+		run_id, season, round, club_id, rank, played, won, drawn, lost, goals_for, goals_against,
+		goal_difference, points, form
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, standing := range payload.Standings {
+		if err := standings.Append(
+			payload.RunID, payload.Season, payload.Round, standing.ClubID, standing.Rank, standing.Played,
+			standing.Won, standing.Drawn, standing.Lost, standing.GoalsFor, standing.GoalsAgainst,
+			standing.GoalDifference, standing.Points, standing.Form,
+		); err != nil {
+			return err
+		}
+	}
+	if err := standings.Send(); err != nil {
+		return err
+	}
+
+	playerSnapshots, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_player_snapshots (
+		run_id, season, round, player_id, club_id, player_name, position, age, overall, potential,
+		form, morale, fitness, value, average_rating, appeared
+	)`)
+	if err != nil {
+		return err
+	}
+	for _, snapshot := range payload.PlayerSnapshots {
+		if err := playerSnapshots.Append(
+			payload.RunID, payload.Season, payload.Round, snapshot.PlayerID, snapshot.ClubID, snapshot.PlayerName,
+			snapshot.Position, snapshot.Age, snapshot.Overall, snapshot.Potential, snapshot.Form, snapshot.Morale,
+			snapshot.Fitness, snapshot.Value, snapshot.AverageRating, snapshot.Appeared,
+		); err != nil {
+			return err
+		}
+	}
+	if err := playerSnapshots.Send(); err != nil {
+		return err
+	}
+
 	matches, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_matches (
-		match_id, season, round, home_id, away_id, home_goals, away_goals, home_xg, away_xg,
+		run_id, match_id, season, round, home_id, away_id, home_goals, away_goals, home_xg, away_xg,
 		home_shots, away_shots, home_shots_on_target, away_shots_on_target, home_possession,
 		home_pressure, away_pressure, home_territory, result
 	)`)
@@ -445,7 +612,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 	}
 	for _, result := range payload.Results {
 		if err := matches.Append(
-			result.FixtureID, payload.Season, result.Round, result.HomeID, result.AwayID,
+			payload.RunID, result.FixtureID, payload.Season, result.Round, result.HomeID, result.AwayID,
 			result.HomeGoals, result.AwayGoals, result.Metrics.HomeXG, result.Metrics.AwayXG,
 			result.Metrics.HomeShots, result.Metrics.AwayShots, result.Metrics.HomeShotsOnTarget,
 			result.Metrics.AwayShotsOnTarget, result.Metrics.HomePossession, result.Metrics.HomePressure,
@@ -460,7 +627,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 
 	players := playerIndex(payload.Players)
 	events, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_match_events (
-		event_key, match_id, season, round, minute, event_type, team_id, player_id, player_name, text, xg
+		run_id, event_key, match_id, season, round, minute, event_type, team_id, player_id, player_name, text, xg
 	)`)
 	if err != nil {
 		return err
@@ -472,7 +639,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 				xg = *event.XG
 			}
 			if err := events.Append(
-				fmt.Sprintf("%s:event:%d", result.FixtureID, index), result.FixtureID, payload.Season, result.Round,
+				payload.RunID, fmt.Sprintf("%s:event:%d", result.FixtureID, index), result.FixtureID, payload.Season, result.Round,
 				event.Minute, event.Type, event.TeamID, players[event.TeamID+"\x00"+event.PlayerName], event.PlayerName,
 				event.Text, xg,
 			); err != nil {
@@ -485,7 +652,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 	}
 
 	frames, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_player_frames (
-		frame_key, match_id, season, round, frame_index, minute, phase, possessing_team_id, ball_x, ball_y,
+		run_id, frame_key, match_id, season, round, frame_index, minute, phase, possessing_team_id, ball_x, ball_y,
 		player_id, team_id, player_name, position, player_x, player_y, target_x, target_y, intent
 	)`)
 	if err != nil {
@@ -495,7 +662,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 		for frameIndex, frame := range result.Trace {
 			for _, player := range frame.Players {
 				if err := frames.Append(
-					fmt.Sprintf("%s:frame:%d:%s", result.FixtureID, frameIndex, player.ID), result.FixtureID,
+					payload.RunID, fmt.Sprintf("%s:frame:%d:%s", result.FixtureID, frameIndex, player.ID), result.FixtureID,
 					payload.Season, result.Round, frameIndex, frame.Minute, frame.Phase, frame.PossessingTeamID,
 					frame.Ball.X, frame.Ball.Y, player.ID, player.TeamID, player.Name, player.Position, player.X,
 					player.Y, player.TargetX, player.TargetY, player.Intent,
@@ -510,7 +677,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 	}
 
 	ratings, err := conn.PrepareBatch(ctx, `INSERT INTO touchline_player_ratings (
-		rating_key, match_id, season, round, player_id, club_id, player_name, rating, opponent_id
+		run_id, rating_key, match_id, season, round, player_id, club_id, player_name, rating, opponent_id
 	)`)
 	if err != nil {
 		return err
@@ -526,7 +693,7 @@ func insertClickHouse(ctx context.Context, conn driver.Conn, payload MatchdayPay
 				opponentID = result.HomeID
 			}
 			if err := ratings.Append(
-				fmt.Sprintf("%s:rating:%s", result.FixtureID, playerID), result.FixtureID, payload.Season,
+				payload.RunID, fmt.Sprintf("%s:rating:%s", result.FixtureID, playerID), result.FixtureID, payload.Season,
 				result.Round, playerID, player.ClubID, player.Name, rating, opponentID,
 			); err != nil {
 				return err
@@ -581,6 +748,8 @@ func (w *icebergWriter) append(ctx context.Context, payload MatchdayPayload) err
 		{name: "match_events", schema: eventsIcebergSchema(), table: eventsArrowTable(payload)},
 		{name: "player_frames", schema: framesIcebergSchema(), table: framesArrowTable(payload)},
 		{name: "player_ratings", schema: ratingsIcebergSchema(), table: ratingsArrowTable(payload)},
+		{name: "standings", schema: standingsIcebergSchema(), table: standingsArrowTable(payload)},
+		{name: "player_snapshots", schema: playerSnapshotsIcebergSchema(), table: playerSnapshotsArrowTable(payload)},
 	}
 	for _, item := range appendFns {
 		if item.table == nil || item.table.NumRows() == 0 {
@@ -743,6 +912,65 @@ func ratingsArrowTable(payload MatchdayPayload) arrow.Table {
 	return finishArrowTable(schema, builder)
 }
 
+func standingsArrowTable(payload MatchdayPayload) arrow.Table {
+	schema := arrowSchema([]arrow.Field{
+		stringField("run_id"), intField("season"), intField("round"), stringField("club_id"), intField("rank"),
+		intField("played"), intField("won"), intField("drawn"), intField("lost"), intField("goals_for"),
+		intField("goals_against"), intField("goal_difference"), intField("points"), stringField("form"),
+	})
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	for _, standing := range payload.Standings {
+		builder.Field(0).(*array.StringBuilder).Append(payload.RunID)
+		builder.Field(1).(*array.Int64Builder).Append(int64(payload.Season))
+		builder.Field(2).(*array.Int64Builder).Append(int64(payload.Round))
+		builder.Field(3).(*array.StringBuilder).Append(standing.ClubID)
+		builder.Field(4).(*array.Int64Builder).Append(int64(standing.Rank))
+		builder.Field(5).(*array.Int64Builder).Append(int64(standing.Played))
+		builder.Field(6).(*array.Int64Builder).Append(int64(standing.Won))
+		builder.Field(7).(*array.Int64Builder).Append(int64(standing.Drawn))
+		builder.Field(8).(*array.Int64Builder).Append(int64(standing.Lost))
+		builder.Field(9).(*array.Int64Builder).Append(int64(standing.GoalsFor))
+		builder.Field(10).(*array.Int64Builder).Append(int64(standing.GoalsAgainst))
+		builder.Field(11).(*array.Int64Builder).Append(int64(standing.GoalDifference))
+		builder.Field(12).(*array.Int64Builder).Append(int64(standing.Points))
+		builder.Field(13).(*array.StringBuilder).Append(standing.Form)
+	}
+	return finishArrowTable(schema, builder)
+}
+
+func playerSnapshotsArrowTable(payload MatchdayPayload) arrow.Table {
+	schema := arrowSchema([]arrow.Field{
+		stringField("run_id"), intField("season"), intField("round"), stringField("player_id"), stringField("club_id"),
+		stringField("player_name"), stringField("position"), intField("age"), intField("overall"), intField("potential"),
+		intField("form"), intField("morale"), intField("fitness"), floatField("value"), floatField("average_rating"),
+		intField("appeared"),
+	})
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	for _, snapshot := range payload.PlayerSnapshots {
+		builder.Field(0).(*array.StringBuilder).Append(payload.RunID)
+		builder.Field(1).(*array.Int64Builder).Append(int64(payload.Season))
+		builder.Field(2).(*array.Int64Builder).Append(int64(payload.Round))
+		builder.Field(3).(*array.StringBuilder).Append(snapshot.PlayerID)
+		builder.Field(4).(*array.StringBuilder).Append(snapshot.ClubID)
+		builder.Field(5).(*array.StringBuilder).Append(snapshot.PlayerName)
+		builder.Field(6).(*array.StringBuilder).Append(snapshot.Position)
+		builder.Field(7).(*array.Int64Builder).Append(int64(snapshot.Age))
+		builder.Field(8).(*array.Int64Builder).Append(int64(snapshot.Overall))
+		builder.Field(9).(*array.Int64Builder).Append(int64(snapshot.Potential))
+		builder.Field(10).(*array.Int64Builder).Append(int64(snapshot.Form))
+		builder.Field(11).(*array.Int64Builder).Append(int64(snapshot.Morale))
+		builder.Field(12).(*array.Int64Builder).Append(int64(snapshot.Fitness))
+		builder.Field(13).(*array.Float64Builder).Append(snapshot.Value)
+		builder.Field(14).(*array.Float64Builder).Append(snapshot.AverageRating)
+		appeared := int64(0)
+		if snapshot.Appeared {
+			appeared = 1
+		}
+		builder.Field(15).(*array.Int64Builder).Append(appeared)
+	}
+	return finishArrowTable(schema, builder)
+}
+
 func finishArrowTable(schema *arrow.Schema, builder *array.RecordBuilder) arrow.Table {
 	record := builder.NewRecordBatch()
 	builder.Release()
@@ -825,6 +1053,46 @@ func ratingsIcebergSchema() *iceberg.Schema {
 		{ID: 7, Name: "player_name", Type: iceberg.PrimitiveTypes.String, Required: true},
 		{ID: 8, Name: "rating", Type: iceberg.PrimitiveTypes.Float64, Required: true},
 		{ID: 9, Name: "opponent_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+	})
+}
+
+func standingsIcebergSchema() *iceberg.Schema {
+	return icebergSchema([]iceberg.NestedField{
+		{ID: 1, Name: "run_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 2, Name: "season", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 3, Name: "round", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 4, Name: "club_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 5, Name: "rank", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 6, Name: "played", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 7, Name: "won", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 8, Name: "drawn", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 9, Name: "lost", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 10, Name: "goals_for", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 11, Name: "goals_against", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 12, Name: "goal_difference", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 13, Name: "points", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 14, Name: "form", Type: iceberg.PrimitiveTypes.String, Required: true},
+	})
+}
+
+func playerSnapshotsIcebergSchema() *iceberg.Schema {
+	return icebergSchema([]iceberg.NestedField{
+		{ID: 1, Name: "run_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 2, Name: "season", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 3, Name: "round", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 4, Name: "player_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 5, Name: "club_id", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 6, Name: "player_name", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 7, Name: "position", Type: iceberg.PrimitiveTypes.String, Required: true},
+		{ID: 8, Name: "age", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 9, Name: "overall", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 10, Name: "potential", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 11, Name: "form", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 12, Name: "morale", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 13, Name: "fitness", Type: iceberg.PrimitiveTypes.Int64, Required: true},
+		{ID: 14, Name: "value", Type: iceberg.PrimitiveTypes.Float64, Required: true},
+		{ID: 15, Name: "average_rating", Type: iceberg.PrimitiveTypes.Float64, Required: true},
+		{ID: 16, Name: "appeared", Type: iceberg.PrimitiveTypes.Int64, Required: true},
 	})
 }
 

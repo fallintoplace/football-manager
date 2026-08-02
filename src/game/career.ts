@@ -1,7 +1,17 @@
 import { clamp, createInitialCareer, createRoundRobin, createStanding } from './data'
 import { recommendLineup, playerScore, validateLineup } from './lineup'
 import { simulateMatch } from './sim'
-import type { CareerState, Club, MatchResult, NewsItem, Player, Standing, Tactic, TrainingFocus } from './types'
+import type {
+  CareerState,
+  Club,
+  MatchResult,
+  NewsItem,
+  Player,
+  SeasonAnalyticsSnapshot,
+  Standing,
+  Tactic,
+  TrainingFocus,
+} from './types'
 
 const saveKey = 'touchline-career-v3'
 
@@ -123,6 +133,7 @@ export type SeasonSimulation = {
   state: CareerState
   results: MatchResult[]
   matchdays: MatchResult[][]
+  snapshots: SeasonAnalyticsSnapshot[]
 }
 
 export function advanceMatchday(state: CareerState): CareerState {
@@ -180,18 +191,19 @@ export function advanceMatchdayWithResults(state: CareerState): MatchdayAdvance 
 
 export function simulateSeasonWithResults(state: CareerState): SeasonSimulation {
   if (state.roundIndex >= state.fixtures.length) {
-    return { state, results: [], matchdays: [] }
+    return { state, results: [], matchdays: [], snapshots: [] }
   }
 
   let current = state
   const results: MatchResult[] = []
   const matchdays: MatchResult[][] = []
+  const snapshots: SeasonAnalyticsSnapshot[] = []
   let finalSelectedResult: MatchResult | undefined
 
   while (current.roundIndex < current.fixtures.length) {
     const advanced = advanceMatchdayWithResults(current)
     if (!advanced.results.length || advanced.state.roundIndex === current.roundIndex) {
-      return { state: current, results, matchdays }
+      return { state: current, results, matchdays, snapshots }
     }
 
     const selectedResult = advanced.results.find(
@@ -201,6 +213,11 @@ export function simulateSeasonWithResults(state: CareerState): SeasonSimulation 
 
     results.push(...advanced.results.map((result) => compactResult(result, state.selectedClubId)))
     matchdays.push(advanced.results.map((result) => compactResult(result, state.selectedClubId)))
+    snapshots.push({
+      round: advanced.results[0].round,
+      standings: advanced.state.standings,
+      players: advanced.state.clubs.flatMap((club) => club.squad),
+    })
     current = {
       ...advanced.state,
       results: [...current.results, ...advanced.results.map((result) => ({ ...result, trace: [] }))],
@@ -216,7 +233,7 @@ export function simulateSeasonWithResults(state: CareerState): SeasonSimulation 
     }
   }
 
-  return { state: current, results, matchdays }
+  return { state: current, results, matchdays, snapshots }
 }
 
 export function getSortedStandings(standings: Standing[]) {

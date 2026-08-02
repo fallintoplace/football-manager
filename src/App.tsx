@@ -43,13 +43,24 @@ import {
   updateTactic,
   updateTraining,
 } from './game/career'
-import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMatchday } from './game/analytics'
+import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMatchday, seasonRunId } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerAttributeSummary, playerOverall, playerScore, validateLineup } from './game/lineup'
 import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
-import type { CareerState, Club, Formation, MatchResult, Mentality, PlayerPosition, Tactic, TrainingFocus } from './game/types'
+import type {
+  CareerState,
+  Club,
+  Formation,
+  MatchResult,
+  Mentality,
+  PlayerPosition,
+  SeasonAnalyticsSnapshot,
+  Tactic,
+  TrainingFocus,
+} from './game/types'
 
 type Tab = 'club' | 'squad' | 'tactics' | 'match' | 'league' | 'analytics'
+type SeasonSyncProgress = { completed: number; total: number }
 
 const tabs: { id: Tab; label: string; Icon: typeof Gauge }[] = [
   { id: 'club', label: 'Matchday', Icon: Gauge },
@@ -70,6 +81,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('club')
   const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsSyncStatus>('unknown')
   const [simulatingSeason, setSimulatingSeason] = useState(false)
+  const [seasonSyncProgress, setSeasonSyncProgress] = useState<SeasonSyncProgress>()
 
   const selectedClub = useMemo(() => getClub(state, state.selectedClubId), [state])
   const sortedStandings = useMemo(() => getSortedStandings(state.standings), [state.standings])
@@ -97,6 +109,7 @@ function App() {
     const advanced = advanceMatchdayWithResults(state)
     setState(advanced.state)
     if (advanced.results.length) {
+      setSeasonSyncProgress(undefined)
       setAnalyticsStatus('syncing')
       void ingestMatchday(buildAnalyticsPayload(advanced.state, advanced.results))
         .then(() => setAnalyticsStatus('online'))
@@ -117,8 +130,11 @@ function App() {
       setState(simulation.state)
       setActiveTab('league')
       if (simulation.results.length) {
+        setSeasonSyncProgress({ completed: 0, total: simulation.matchdays.length })
         setAnalyticsStatus('syncing')
-        void ingestSeason(simulation.state, simulation.matchdays)
+        void ingestSeason(simulation.state, simulation.matchdays, simulation.snapshots, (completed, total) => {
+          setSeasonSyncProgress({ completed, total })
+        })
           .then(() => setAnalyticsStatus('online'))
           .catch(() => setAnalyticsStatus('offline'))
       }
@@ -225,7 +241,15 @@ function App() {
 
       {activeTab === 'league' && <LeagueView state={state} standings={sortedStandings} />}
 
-      {activeTab === 'analytics' && <AnalyticsView clubId={selectedClub.id} status={analyticsStatus} localResults={state.results} />}
+      {activeTab === 'analytics' && (
+        <AnalyticsView
+          clubId={selectedClub.id}
+          runId={seasonRunId(state)}
+          status={analyticsStatus}
+          seasonSyncProgress={seasonSyncProgress}
+          localResults={state.results}
+        />
+      )}
     </main>
   )
 }
@@ -247,9 +271,15 @@ function ClubBadge({
   )
 }
 
-async function ingestSeason(state: CareerState, matchdays: MatchResult[][]) {
-  for (const results of matchdays) {
-    await ingestMatchday(buildAnalyticsPayload(state, results))
+async function ingestSeason(
+  state: CareerState,
+  matchdays: MatchResult[][],
+  snapshots: SeasonAnalyticsSnapshot[],
+  onProgress: (completed: number, total: number) => void,
+) {
+  for (const [index, results] of matchdays.entries()) {
+    await ingestMatchday(buildAnalyticsPayload(state, results, snapshots[index]))
+    onProgress(index + 1, matchdays.length)
   }
 }
 
@@ -976,22 +1006,26 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
 
 function AnalyticsView({
   clubId,
+  runId,
   status,
+  seasonSyncProgress,
   localResults,
 }: {
   clubId: string
+  runId: string
   status: AnalyticsSyncStatus
+  seasonSyncProgress?: SeasonSyncProgress
   localResults: MatchResult[]
 }) {
   const [summary, setSummary] = useState<AnalyticsSummary>()
   const [loadedKey, setLoadedKey] = useState('')
   const [error, setError] = useState(false)
-  const requestKey = `${clubId}:${localResults.length}`
+  const requestKey = `${clubId}:${runId}:${localResults.length}`
   const loading = loadedKey !== requestKey
 
   useEffect(() => {
     let active = true
-    void fetchAnalyticsSummary(clubId)
+    void fetchAnalyticsSummary(clubId, runId)
       .then((nextSummary) => {
         if (!active) return
         setSummary(nextSummary)
@@ -1007,9 +1041,18 @@ function AnalyticsView({
     return () => {
       active = false
     }
-  }, [clubId, requestKey])
+  }, [clubId, requestKey, runId])
 
-  const statusLabel = status === 'syncing' ? 'Syncing matchday' : status === 'online' ? 'ClickHouse connected' : status === 'offline' ? 'Analytics offline' : 'Waiting for first sync'
+  const statusLabel =
+    status === 'syncing'
+      ? seasonSyncProgress
+        ? `Syncing season ${seasonSyncProgress.completed}/${seasonSyncProgress.total}`
+        : 'Syncing matchday'
+      : status === 'online'
+        ? 'ClickHouse connected'
+        : status === 'offline'
+          ? 'Analytics offline'
+          : 'Waiting for first sync'
 
   return (
     <section className="single-view analytics-view">
@@ -1028,6 +1071,10 @@ function AnalyticsView({
           <span className="status-dot" />
           <strong>{statusLabel}</strong>
           <span>Arrow batches land in ClickHouse for live queries and Iceberg for replay history.</span>
+        </div>
+        <div className="analytics-run-id">
+          <span>Season run</span>
+          <code>{runId}</code>
         </div>
       </section>
 
