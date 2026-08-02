@@ -48,6 +48,7 @@ export type Club = {
   name: string
   shortName: string
   city: string
+  badgeUrl: string
   colors: [string, string]
   budget: number
   prestige: number

@@ -11,6 +11,7 @@ import type {
   Tactic,
 } from './types'
 import { recommendLineup } from './lineup'
+import { premierLeagueClubSeeds } from './premierLeagueData'
 
 export const defaultTactic: Tactic = {
   formation: '4-2-3-1',
@@ -19,75 +20,6 @@ export const defaultTactic: Tactic = {
   tempo: 58,
   defensiveLine: 61,
 }
-
-const clubSeeds = [
-  ['harbor-city', 'Harbor City', 'HBC', 'Harbor', '#0f8a5f', '#f0d25f', 71, 'Assertive'],
-  ['northbridge', 'Northbridge Athletic', 'NBA', 'Northbridge', '#2456a6', '#f3f7ff', 69, 'Measured'],
-  ['coppergate', 'Coppergate Rovers', 'COP', 'Coppergate', '#b64a38', '#22313f', 67, 'Assertive'],
-  ['kingsport', 'Kingsport Vale', 'KSV', 'Kingsport', '#713f98', '#f2e9ff', 66, 'Measured'],
-  ['estuary', 'Estuary FC', 'EST', 'Estuary', '#007c89', '#f4fbfb', 64, 'Relentless'],
-  ['blackwater', 'Blackwater United', 'BLU', 'Blackwater', '#1f2328', '#f6c745', 63, 'Measured'],
-  ['mossfield', 'Mossfield Town', 'MOS', 'Mossfield', '#587b32', '#fff4dc', 61, 'Relentless'],
-  ['redhaven', 'Redhaven', 'RED', 'Redhaven', '#cf2f42', '#f7f7f7', 60, 'Assertive'],
-  ['wardenshire', 'Wardenshire', 'WAR', 'Wardenshire', '#394b59', '#d8edf0', 58, 'Measured'],
-  ['larkspur', 'Larkspur City', 'LAR', 'Larkspur', '#315fdd', '#ffe770', 57, 'Relentless'],
-  ['ironhall', 'Ironhall', 'IRN', 'Ironhall', '#5b626a', '#f4873d', 56, 'Measured'],
-  ['port-ember', 'Port Ember', 'PEM', 'Port Ember', '#df5b35', '#17324d', 55, 'Assertive'],
-] as const
-
-const firstNames = [
-  'Milo',
-  'Anton',
-  'Luca',
-  'Theo',
-  'Nico',
-  'Jonas',
-  'Eli',
-  'Marco',
-  'Rafa',
-  'Samir',
-  'Aron',
-  'Felix',
-  'Ivo',
-  'Tomas',
-  'Noah',
-  'Kian',
-  'Mateo',
-  'Oskar',
-  'Ruben',
-  'Kai',
-  'Leon',
-  'Dario',
-  'Adem',
-  'Soren',
-]
-
-const surnames = [
-  'Voss',
-  'Mercer',
-  'Kane',
-  'Rowe',
-  'Costa',
-  'Silva',
-  'Berg',
-  'Hale',
-  'Nash',
-  'Stone',
-  'Vale',
-  'Kovac',
-  'Reid',
-  'Santos',
-  'Marek',
-  'Doyle',
-  'Ilic',
-  'Sharp',
-  'Novak',
-  'Marin',
-  'Cross',
-  'Avery',
-  'Bello',
-  'Roth',
-]
 
 const personalities: Personality[] = [
   'Leader',
@@ -98,41 +30,8 @@ const personalities: Personality[] = [
   'Ambitious',
 ]
 
-const squadShape: PlayerPosition[] = [
-  'GK',
-  'GK',
-  'DEF',
-  'DEF',
-  'DEF',
-  'DEF',
-  'DEF',
-  'DEF',
-  'MID',
-  'MID',
-  'MID',
-  'MID',
-  'MID',
-  'MID',
-  'FWD',
-  'FWD',
-  'FWD',
-  'FWD',
-]
-
 export function createInitialCareer(seed = 7321): CareerState {
-  const clubs = clubSeeds.map(([id, name, shortName, city, primary, secondary, strength, style], index) =>
-    createClub({
-      id,
-      name,
-      shortName,
-      city,
-      colors: [primary, secondary],
-      strength,
-      style,
-      index,
-      seed,
-    }),
-  )
+  const clubs = premierLeagueClubSeeds.map((clubSeed, index) => createClub({ ...clubSeed, index, seed }))
   const fixtures = createRoundRobin(clubs.map((club) => club.id), seed)
   const selectedClubId = clubs[0].id
   const starters = recommendLineup(clubs[0], defaultTactic)
@@ -225,7 +124,17 @@ export function createRoundRobin(teamIds: string[], seed: number): Fixture[][] {
     rotation = [rotation[0], rotation[rotation.length - 1], ...rotation.slice(1, rotation.length - 1)]
   }
 
-  return rounds
+  const returnRounds = rounds.map((fixtures, roundIndex) =>
+    fixtures.map((fixture, fixtureIndex) => ({
+      ...fixture,
+      id: `s${seed}-r${roundIndex + roundsCount + 1}-m${fixtureIndex + 1}`,
+      round: roundIndex + roundsCount,
+      homeId: fixture.awayId,
+      awayId: fixture.homeId,
+    })),
+  )
+
+  return [...rounds, ...returnRounds]
 }
 
 function createClub(input: {
@@ -233,15 +142,17 @@ function createClub(input: {
   name: string
   shortName: string
   city: string
+  badgeUrl: string
   colors: [string, string]
   strength: number
   style: Mentality
+  players: Array<{ name: string; position: PlayerPosition }>
   index: number
   seed: number
 }): Club {
   const random = mulberry32(input.seed + input.index * 997)
-  const squad = squadShape.map((position, playerIndex) =>
-    createPlayer(input.id, position, input.strength, input.index, playerIndex, random),
+  const squad = input.players.map((player, playerIndex) =>
+    createPlayer(input.id, player.name, player.position, input.strength, playerIndex, random),
   )
 
   return {
@@ -249,6 +160,7 @@ function createClub(input: {
     name: input.name,
     shortName: input.shortName,
     city: input.city,
+    badgeUrl: input.badgeUrl,
     colors: input.colors,
     budget: Number((4.5 + input.strength * 0.16 + random() * 3).toFixed(1)),
     prestige: input.strength,
@@ -261,17 +173,15 @@ function createClub(input: {
 
 function createPlayer(
   clubId: string,
+  name: string,
   position: PlayerPosition,
   teamStrength: number,
-  clubIndex: number,
   playerIndex: number,
   random: () => number,
 ): Player {
   const base = teamStrength + randomRange(random, -12, 9)
   const age = Math.round(randomRange(random, 18, 33))
   const potential = clamp(base + randomRange(random, age < 23 ? 8 : -4, age < 24 ? 22 : 8), 42, 96)
-  const first = firstNames[(clubIndex * 5 + playerIndex * 3) % firstNames.length]
-  const last = surnames[(clubIndex * 7 + playerIndex * 5) % surnames.length]
   const personality = personalities[Math.floor(random() * personalities.length)]
   const wage = Math.round((base * 0.075 + random() * 1.4) * 10) / 10
   const value = Math.round((base * 0.32 + potential * 0.25 + random() * 8) * 10) / 10
@@ -286,7 +196,7 @@ function createPlayer(
   return {
     id: `${clubId}-${position.toLowerCase()}-${playerIndex}`,
     clubId,
-    name: `${first} ${last}`,
+    name,
     age,
     position,
     attack: clamp(Math.round(base + positionBoost.attack + randomRange(random, -8, 8)), 18, 96),

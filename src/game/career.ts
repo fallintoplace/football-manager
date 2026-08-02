@@ -3,7 +3,7 @@ import { recommendLineup, playerScore, validateLineup } from './lineup'
 import { simulateMatch } from './sim'
 import type { CareerState, Club, MatchResult, NewsItem, Player, Standing, Tactic, TrainingFocus } from './types'
 
-const saveKey = 'touchline-career-v1'
+const saveKey = 'touchline-career-v2'
 
 export function loadCareer(): CareerState | undefined {
   try {

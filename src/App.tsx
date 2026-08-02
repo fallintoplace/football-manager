@@ -45,7 +45,7 @@ import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMa
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerScore, validateLineup } from './game/lineup'
 import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
-import type { CareerState, Formation, MatchResult, Mentality, PlayerPosition, Tactic, TrainingFocus } from './game/types'
+import type { CareerState, Club, Formation, MatchResult, Mentality, PlayerPosition, Tactic, TrainingFocus } from './game/types'
 
 type Tab = 'club' | 'squad' | 'tactics' | 'match' | 'league' | 'analytics'
 
@@ -115,9 +115,7 @@ function App() {
     <main className="app-shell" style={clubStyle}>
       <header className="topbar">
         <div className="club-lockup">
-          <div className="club-crest" aria-hidden="true">
-            <Shield size={28} />
-          </div>
+          <ClubBadge club={selectedClub} size="lg" />
           <div>
             <p className="eyebrow">Season {state.season}</p>
             <h1>{selectedClub.name}</h1>
@@ -206,6 +204,23 @@ function App() {
   )
 }
 
+function ClubBadge({
+  club,
+  size = 'md',
+}: {
+  club: Pick<Club, 'name' | 'badgeUrl' | 'colors'>
+  size?: 'sm' | 'md' | 'lg'
+}) {
+  const [failed, setFailed] = useState(false)
+  const iconSize = size === 'lg' ? 26 : size === 'md' ? 20 : 15
+
+  return (
+    <span className={`club-badge club-badge-${size}`} style={{ backgroundColor: club.colors[0], color: club.colors[1] }}>
+      {failed ? <Shield size={iconSize} /> : <img src={club.badgeUrl} alt={`${club.name} badge`} onError={() => setFailed(true)} />}
+    </span>
+  )
+}
+
 function ClubView({
   state,
   selectedClub,
@@ -261,14 +276,20 @@ function ClubView({
         </div>
 
         <div className="fixture-line">
-          <div>
-            <span className="team-code">{selectedClub.shortName}</span>
-            <strong>{selectedClub.name}</strong>
+          <div className="fixture-team">
+            <ClubBadge club={selectedClub} size="md" />
+            <div>
+              <span className="team-code">{selectedClub.shortName}</span>
+              <strong>{selectedClub.name}</strong>
+            </div>
           </div>
           <span className="versus">vs</span>
-          <div>
-            <span className="team-code">{nextOpponent?.shortName ?? 'END'}</span>
-            <strong>{nextOpponent?.name ?? 'Season Complete'}</strong>
+          <div className="fixture-team">
+            {nextOpponent ? <ClubBadge club={nextOpponent} size="md" /> : <span className="club-badge club-badge-md"><Shield size={20} /></span>}
+            <div>
+              <span className="team-code">{nextOpponent?.shortName ?? 'END'}</span>
+              <strong>{nextOpponent?.name ?? 'Season Complete'}</strong>
+            </div>
           </div>
         </div>
 
@@ -287,7 +308,7 @@ function ClubView({
             <p className="eyebrow">Opponent</p>
             <h2>{nextOpponent?.name ?? 'Season Review'}</h2>
           </div>
-          <Shield size={20} />
+          {nextOpponent ? <ClubBadge club={nextOpponent} size="md" /> : <Shield size={20} />}
         </div>
         {nextOpponent && opponentTactic ? (
           <div className="scout-brief">
@@ -550,7 +571,7 @@ function SquadView({
             <p className="eyebrow">{selectedClub.shortName}</p>
             <h2>Squad Room</h2>
           </div>
-          <Users size={22} />
+          <ClubBadge club={selectedClub} size="md" />
         </div>
 
         <div className="table-wrap">
@@ -790,7 +811,7 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
         <div className="section-heading">
           <div>
             <p className="eyebrow">Table</p>
-            <h2>League One</h2>
+            <h2>Premier League</h2>
           </div>
           <Trophy size={22} />
         </div>
@@ -816,8 +837,13 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
                   <tr className={club.id === state.selectedClubId ? 'managed-row' : undefined} key={club.id}>
                     <td>{index + 1}</td>
                     <td>
-                      <strong>{club.name}</strong>
-                      <span>{club.managerStyle}</span>
+                      <div className="table-club">
+                        <ClubBadge club={club} size="sm" />
+                        <div>
+                          <strong>{club.name}</strong>
+                          <span>{club.managerStyle}</span>
+                        </div>
+                      </div>
                     </td>
                     <td>{standing.played}</td>
                     <td>{standing.won}</td>
@@ -851,13 +877,17 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
           <CalendarDays size={20} />
         </div>
         <div className="fixture-list">
-          {currentRound.map((fixture) => (
+          {currentRound.map((fixture) => {
+            const home = getClub(state, fixture.homeId)
+            const away = getClub(state, fixture.awayId)
+            return (
             <div className="fixture-row" key={fixture.id}>
-              <span>{getClub(state, fixture.homeId).shortName}</span>
+              <span className="fixture-club"><ClubBadge club={home} size="sm" />{home.shortName}</span>
               <strong>v</strong>
-              <span>{getClub(state, fixture.awayId).shortName}</span>
+              <span className="fixture-club"><ClubBadge club={away} size="sm" />{away.shortName}</span>
             </div>
-          ))}
+            )
+          })}
         </div>
       </section>
 
@@ -871,15 +901,19 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
         </div>
         <div className="fixture-list">
           {recentResults.length ? (
-            recentResults.map((result) => (
+            recentResults.map((result) => {
+              const home = getClub(state, result.homeId)
+              const away = getClub(state, result.awayId)
+              return (
               <div className="fixture-row result-row" key={result.fixtureId}>
-                <span>{getClub(state, result.homeId).shortName}</span>
+                <span className="fixture-club"><ClubBadge club={home} size="sm" />{home.shortName}</span>
                 <strong>
                   {result.homeGoals}-{result.awayGoals}
                 </strong>
-                <span>{getClub(state, result.awayId).shortName}</span>
+                <span className="fixture-club"><ClubBadge club={away} size="sm" />{away.shortName}</span>
               </div>
-            ))
+              )
+            })
           ) : (
             <p className="empty-state">No results yet.</p>
           )}

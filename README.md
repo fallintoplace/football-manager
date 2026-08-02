@@ -1,10 +1,10 @@
 # Touchline
 
-A fast fictional football management prototype focused on visible tactical consequences, squad mood, and a compact season loop.
+A fast football management prototype focused on visible tactical consequences, squad mood, and a compact season loop.
 
 ## Current Slice
 
-- 12-club fictional league with generated squads
+- 20-club Premier League snapshot with real player names, positions, and club badges
 - Club switching, board trust, fan mood, budget, standings, and fixtures
 - Matchday Hub with opponent brief, readiness checks, tactical plan, and team sheet
 - Manual starting XI selection with legal formation validation
@@ -18,6 +18,8 @@ A fast fictional football management prototype focused on visible tactical conse
 - Local save/reset through browser storage
 - Season rollover after the fixture list completes
 - Analytics Lab with selected-club match, event, replay-frame, and player-rating aggregates
+
+The 2026/27 Premier League roster snapshot is pinned in `src/game/premierLeagueData.ts`. Player names and positions come from the Fantasy Premier League bootstrap feed captured on 2026-08-02; badge images use the API-Football crest CDN. Match events, player ratings, and tactical outcomes remain simulated so the local demo is deterministic and can feed the ClickHouse and Iceberg pipeline without live-match credentials.
 
 ## Analytics Stack
 
