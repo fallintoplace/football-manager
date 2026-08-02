@@ -30,7 +30,7 @@ const personalities: Personality[] = [
   'Ambitious',
 ]
 
-export function createInitialCareer(seed = 7321): CareerState {
+export function createInitialCareer(seed = 7321, careerId = createCareerId()): CareerState {
   const clubs = premierLeagueClubSeeds.map((clubSeed, index) => createClub({ ...clubSeed, index, seed }))
   const fixtures = createRoundRobin(clubs.map((club) => club.id), seed)
   const selectedClubId = clubs[0].id
@@ -39,6 +39,7 @@ export function createInitialCareer(seed = 7321): CareerState {
   const starterIds = starters.map((player) => player.id)
 
   return {
+    careerId,
     seed,
     season: 1,
     roundIndex: 0,
@@ -252,6 +253,7 @@ function createPlayer(
     wage,
     value,
     personality,
+    development: {},
   }
 }
 
@@ -389,6 +391,26 @@ export function mulberry32(seed: number) {
 
 export function randomRange(random: () => number, min: number, max: number) {
   return min + random() * (max - min)
+}
+
+export function createCareerId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `career-${Date.now().toString(36)}-${Math.floor(Math.random() * 0x7fffffff).toString(36)}`
+}
+
+export function createSimulationSeed() {
+  return Math.floor(Math.random() * 0x7fffffff)
+}
+
+export function hashString(value: string) {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash | 0
 }
 
 export function clamp(value: number, min = 0, max = 100) {

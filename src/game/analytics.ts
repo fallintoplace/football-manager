@@ -74,7 +74,7 @@ const analyticsBaseUrl = import.meta.env.VITE_ANALYTICS_URL ?? 'http://localhost
 export const clickhouseUiUrl = import.meta.env.VITE_CLICKHOUSE_UI_URL ?? 'http://localhost:8123/clickstack'
 
 export function seasonRunId(state: CareerState) {
-  return `s${state.seed}-season-${state.season}`
+  return `${state.careerId}:season:${state.season}`
 }
 
 export function buildAnalyticsPayload(

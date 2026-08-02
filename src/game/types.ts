@@ -60,6 +60,7 @@ export type Player = {
   wage: number
   value: number
   personality: Personality
+  development: Record<string, number>
 }
 
 export type Club = {
@@ -173,6 +174,7 @@ export type NewsItem = {
 }
 
 export type CareerState = {
+  careerId: string
   seed: number
   season: number
   roundIndex: number

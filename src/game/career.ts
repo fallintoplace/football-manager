@@ -1,5 +1,5 @@
-import { clamp, createInitialCareer, createRoundRobin, createStanding } from './data'
-import { recommendLineup, playerScore, validateLineup } from './lineup'
+import { clamp, createCareerId, createInitialCareer, createRoundRobin, createSimulationSeed, createStanding } from './data'
+import { playerOverall, recommendLineup, playerScore, validateLineup } from './lineup'
 import { simulateMatch } from './sim'
 import type {
   CareerState,
@@ -27,14 +27,18 @@ export function loadCareer(): CareerState | undefined {
 
 export function saveCareer(state: CareerState): CareerState {
   const savedAt = new Date().toISOString()
-  const next = { ...state, savedAt }
+  const next = {
+    ...state,
+    savedAt,
+    results: compactStoredResults(state.results, state.lastMatchId),
+  }
   window.localStorage.setItem(saveKey, JSON.stringify(next))
   return next
 }
 
-export function resetCareer(seed = Math.floor(Date.now() % 100000)) {
+export function resetCareer(seed = createSimulationSeed()) {
   window.localStorage.removeItem(saveKey)
-  return createInitialCareer(seed)
+  return createInitialCareer(seed, createCareerId())
 }
 
 export function changeSelectedClub(state: CareerState, selectedClubId: string): CareerState {
@@ -180,7 +184,7 @@ export function advanceMatchdayWithResults(state: CareerState): MatchdayAdvance 
       ...state,
       clubs,
       standings,
-      results: [...state.results, ...roundResults],
+      results: compactStoredResults([...state.results, ...roundResults], selectedResult?.fixtureId ?? state.lastMatchId),
       roundIndex: state.roundIndex + 1,
       lastMatchId: selectedResult?.fixtureId ?? state.lastMatchId,
       news,
@@ -218,10 +222,7 @@ export function simulateSeasonWithResults(state: CareerState): SeasonSimulation 
       standings: advanced.state.standings,
       players: advanced.state.clubs.flatMap((club) => club.squad),
     })
-    current = {
-      ...advanced.state,
-      results: [...current.results, ...advanced.results.map((result) => ({ ...result, trace: [] }))],
-    }
+    current = advanced.state
   }
 
   if (finalSelectedResult) {
@@ -314,6 +315,10 @@ function compactResult(result: MatchResult, selectedClubId: string): MatchResult
   return belongsToSelectedClub ? result : { ...result, trace: [] }
 }
 
+function compactStoredResults(results: MatchResult[], lastMatchId?: string) {
+  return results.map((result) => (result.fixtureId === lastMatchId ? result : { ...result, trace: [] }))
+}
+
 function applyTraining(club: Club, focus: TrainingFocus, tactic: Tactic): Club {
   const deltas: Record<TrainingFocus, Partial<Record<keyof Player, number>>> = {
     Recovery: { fitness: 9, morale: 2 },
@@ -327,37 +332,53 @@ function applyTraining(club: Club, focus: TrainingFocus, tactic: Tactic): Club {
 
   return {
     ...club,
-    squad: club.squad.map((player) =>
-      syncAggregateRatings({
-        ...player,
-        finishing: clamp(Math.round(player.finishing + (selected.finishing ?? 0)), 18, 99),
-        passing: clamp(Math.round(player.passing + (selected.passing ?? 0)), 18, 99),
-        composure: clamp(Math.round(player.composure + (selected.composure ?? 0)), 18, 99),
-        firstTouch: clamp(Math.round(player.firstTouch + (selected.firstTouch ?? 0)), 18, 99),
-        tackling: clamp(Math.round(player.tackling + (selected.tackling ?? 0)), 18, 99),
-        marking: clamp(Math.round(player.marking + (selected.marking ?? 0)), 18, 99),
-        decisions: clamp(Math.round(player.decisions + (selected.decisions ?? 0)), 18, 99),
-        stamina: clamp(Math.round(player.stamina + (selected.stamina ?? 0)), 18, 99),
-        workRate: clamp(Math.round(player.workRate + (selected.workRate ?? 0)), 18, 99),
-        acceleration: clamp(Math.round(player.acceleration + (selected.acceleration ?? 0)), 18, 99),
-        strength: clamp(Math.round(player.strength + (selected.strength ?? 0)), 18, 99),
-        pace: clamp(Math.round(player.pace + (selected.pace ?? 0)), 18, 99),
-        morale: clamp(Math.round(player.morale + (selected.morale ?? 0)), 0, 100),
-        fitness: clamp(Math.round(player.fitness + (selected.fitness ?? 0) + fatigueTax), 0, 100),
-      }),
-    ),
+    squad: club.squad.map((player) => {
+      let trained = player
+      for (const [attribute, delta] of Object.entries(selected)) {
+        if (!delta) continue
+        if (attribute === 'morale' || attribute === 'fitness') {
+          trained = {
+            ...trained,
+            [attribute]: clamp(Math.round(trained[attribute] + delta + (attribute === 'fitness' ? fatigueTax : 0)), attribute === 'fitness' ? 0 : 0, 100),
+          }
+          continue
+        }
+        trained = applyFractionalTraining(trained, attribute, delta * 0.35)
+      }
+      return syncAggregateRatings(trained)
+    }),
   }
 }
 
 function passiveRecovery(club: Club): Club {
   return {
     ...club,
-    squad: club.squad.map((player) => ({
-      ...player,
-      fitness: clamp(player.fitness + 2, 0, 100),
-      morale: clamp(player.morale + (player.form > 62 ? 1 : 0), 0, 100),
-    })),
+    squad: club.squad.map((player) => {
+      const progressing = applyFractionalTraining(player, 'passing', 0.15)
+      return {
+        ...progressing,
+        fitness: clamp(progressing.fitness + 2, 0, 100),
+        morale: clamp(progressing.morale + (progressing.form > 62 ? 1 : 0), 0, 100),
+      }
+    }),
   }
+}
+
+function applyFractionalTraining(player: Player, attribute: string, delta: number): Player {
+  if (delta > 0 && playerOverall(player) >= player.potential) return player
+  const progress = { ...(player.development ?? {}) }
+  const accumulated = (progress[attribute] ?? 0) + delta
+  const wholeDelta = Math.trunc(accumulated)
+  progress[attribute] = Number((accumulated - wholeDelta).toFixed(4))
+  const currentValue = Number(player[attribute as keyof Player])
+  if (!Number.isFinite(currentValue)) return { ...player, development: progress }
+  const next = {
+    ...player,
+    [attribute]: clamp(Math.round(currentValue + wholeDelta), 18, 99),
+    development: progress,
+  }
+  if (delta > 0 && playerOverall(next) > player.potential) return player
+  return next
 }
 
 function applyMatchMood(club: Club, results: MatchResult[], selectedClubId: string, tactic: Tactic): Club {
@@ -467,13 +488,21 @@ function startNextSeason(state: CareerState): CareerState {
 }
 
 function hydrateCareer(state: CareerState): CareerState {
-  const selectedClub = state.clubs.find((club) => club.id === state.selectedClubId) ?? state.clubs[0]
-  const starterIds = state.starterIds?.length
+  const hydrated = {
+    ...state,
+    careerId: state.careerId ?? `legacy-${state.seed}-${state.savedAt ?? 'career'}`,
+    clubs: state.clubs.map((club) => ({
+      ...club,
+      squad: club.squad.map((player) => ({ ...player, development: player.development ?? {} })),
+    })),
+  }
+  const selectedClub = hydrated.clubs.find((club) => club.id === hydrated.selectedClubId) ?? hydrated.clubs[0]
+  const starterIds = hydrated.starterIds?.length
     ? state.starterIds.filter((id) => selectedClub.squad.some((player) => player.id === id)).slice(0, 11)
-    : recommendLineup(selectedClub, state.tactic).map((player) => player.id)
+    : recommendLineup(selectedClub, hydrated.tactic).map((player) => player.id)
 
   return withStarterIds({
-    ...state,
+    ...hydrated,
     starterIds,
   })
 }
@@ -497,7 +526,8 @@ function withStarterIds(state: CareerState): CareerState {
 }
 
 function developPlayer(player: Player): Player {
-  const youthGrowth = player.age <= 23 ? Math.max(0, player.potential - playerScore(player) * 0.72) * 0.035 : 0
+  const overall = playerOverall(player)
+  const youthGrowth = player.age <= 23 && overall < player.potential ? Math.max(0, player.potential - overall) * 0.035 : 0
   const ageDrag = player.age >= 31 ? -1.2 : 0
   const growth = clamp(youthGrowth + ageDrag, -2, 3)
 

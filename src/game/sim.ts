@@ -1,4 +1,4 @@
-import { clamp, createAiTactic, mulberry32, randomRange } from './data'
+import { clamp, createAiTactic, hashString, mulberry32, randomRange } from './data'
 import { getLineupPlayers, playerOverall, playerScore } from './lineup'
 import type {
   CareerState,
@@ -71,7 +71,7 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
   const away = getClub(state, fixture.awayId)
   const homeTactic = fixture.homeId === state.selectedClubId ? state.tactic : createAiTactic(home)
   const awayTactic = fixture.awayId === state.selectedClubId ? state.tactic : createAiTactic(away)
-  const seed = state.seed + state.season * 999 + fixture.round * 41 + home.id.length * 17 + away.id.length * 31
+  const seed = state.seed ^ hashString(`simulation-v1:${state.season}:${fixture.id}`)
   const random = mulberry32(seed)
   const homeProfile = buildProfile(
     home,
@@ -149,8 +149,8 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
     awayId: away.id,
     homeGoals: homeLedger.goals,
     awayGoals: awayLedger.goals,
-    events: events.sort((left, right) => left.minute - right.minute).slice(0, 24),
-    trace: trace.slice(0, 280),
+    events: retainImportantEvents(events, 24),
+    trace: retainTraceWindow(trace, 280),
     metrics: {
       homeXg: roundOne(homeLedger.xg),
       awayXg: roundOne(awayLedger.xg),
@@ -166,6 +166,19 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
     report: buildReport(homeProfile, awayProfile, ledger, possessionHome),
     playerRatings,
   }
+}
+
+function retainImportantEvents(events: MatchEvent[], limit: number) {
+  const sorted = [...events].sort((left, right) => left.minute - right.minute)
+  const important = sorted.filter((event) => event.type === 'goal' || event.type === 'card')
+  const other = sorted.filter((event) => event.type !== 'goal' && event.type !== 'card')
+  return [...important, ...other.slice(0, Math.max(0, limit - important.length))].sort((left, right) => left.minute - right.minute)
+}
+
+function retainTraceWindow(trace: MatchFrame[], limit: number) {
+  if (trace.length <= limit) return trace
+  const head = Math.floor(limit / 2)
+  return [...trace.slice(0, head), ...trace.slice(-head)]
 }
 
 function simulatePossession({

@@ -13,11 +13,11 @@ SELECT
     goal_difference,
     form
 FROM touchline_standings FINAL
-WHERE run_id = 's7321-season-1'
+WHERE run_id = 'replace-with-run-id'
   AND round = (
       SELECT max(round)
       FROM touchline_standings
-      WHERE run_id = 's7321-season-1'
+      WHERE run_id = 'replace-with-run-id'
   )
 ORDER BY rank;
 
@@ -31,7 +31,7 @@ SELECT
     goal_difference,
     goals_for
 FROM touchline_standings FINAL
-WHERE run_id = 's7321-season-1'
+WHERE run_id = 'replace-with-run-id'
 ORDER BY round, rank;
 
 WITH latest_clubs AS
@@ -41,8 +41,8 @@ WITH latest_clubs AS
         season,
         club_id,
         argMax(short_name, ingested_at) AS club_name
-    FROM touchline_clubs
-    WHERE run_id = 's7321-season-1'
+    FROM touchline_clubs_v2
+    WHERE run_id = 'replace-with-run-id'
     GROUP BY run_id, season, club_id
 ), club_xg AS
 (
@@ -52,8 +52,8 @@ WITH latest_clubs AS
         m.round,
         m.home_id AS club_id,
         m.home_xg AS xg
-    FROM touchline_matches AS m
-    WHERE m.run_id = 's7321-season-1'
+    FROM touchline_matches_v2 AS m
+    WHERE m.run_id = 'replace-with-run-id'
     UNION ALL
     SELECT
         m.run_id,
@@ -61,8 +61,8 @@ WITH latest_clubs AS
         m.round,
         m.away_id AS club_id,
         m.away_xg AS xg
-    FROM touchline_matches AS m
-    WHERE m.run_id = 's7321-season-1'
+    FROM touchline_matches_v2 AS m
+    WHERE m.run_id = 'replace-with-run-id'
 )
 SELECT
     x.run_id,
@@ -88,8 +88,8 @@ SELECT
     count() AS matches,
     round(avg(rating), 2) AS average_rating,
     round(max(rating), 2) AS best_rating
-FROM touchline_player_ratings
-WHERE run_id = 's7321-season-1'
+FROM touchline_player_ratings_v2
+WHERE run_id = 'replace-with-run-id'
 GROUP BY run_id, season, club_id, player_id
 ORDER BY average_rating DESC, matches DESC
 LIMIT 50;
@@ -109,7 +109,7 @@ SELECT
     argMax(fitness, round) AS closing_fitness,
     argMax(average_rating, round) AS last_match_rating
 FROM touchline_player_snapshots FINAL
-WHERE run_id = 's7321-season-1'
+WHERE run_id = 'replace-with-run-id'
 GROUP BY run_id, season, player_id
 ORDER BY overall_change DESC, closing_overall DESC
 LIMIT 50;
@@ -122,8 +122,8 @@ SELECT
     team_id,
     count() AS events,
     round(sum(xg), 3) AS event_xg
-FROM touchline_match_events
-WHERE run_id = 's7321-season-1'
+FROM touchline_match_events_v2
+WHERE run_id = 'replace-with-run-id'
 GROUP BY run_id, season, round, event_type, team_id
 ORDER BY round, events DESC;
 
@@ -138,8 +138,8 @@ SELECT
     intDiv(toInt32(player_x), 5) * 5 AS x_bin,
     intDiv(toInt32(player_y), 5) * 5 AS y_bin,
     count() AS intensity
-FROM touchline_player_frames
-WHERE run_id = 's7321-season-1'
+FROM touchline_player_frames_v2
+WHERE run_id = 'replace-with-run-id'
   AND team_id = 'arsenal'
 GROUP BY run_id, season, round, match_id, team_id, player_id, x_bin, y_bin
 ORDER BY round, match_id, intensity DESC;

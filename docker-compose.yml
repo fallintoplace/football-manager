@@ -12,7 +12,7 @@ services:
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
     ports:
-      - "8181:8181"
+      - "127.0.0.1:8181:8181"
 
   minio:
     image: minio/minio
@@ -22,8 +22,8 @@ services:
       MINIO_DOMAIN: minio
     command: ["server", "/data", "--console-address", ":9001"]
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
 
   minio-init:
     image: minio/mc
@@ -32,7 +32,6 @@ services:
     entrypoint: >-
       /bin/sh -c "until mc alias set local http://minio:9000 admin password; do sleep 1; done;
       mc mb --ignore-existing local/warehouse;
-      mc anonymous set public local/warehouse;
       tail -f /dev/null"
 
   clickhouse:
@@ -40,8 +39,8 @@ services:
     environment:
       CLICKHOUSE_PASSWORD: clickhouse
     ports:
-      - "8123:8123"
-      - "9002:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9002:9000"
 
   analytics:
     build:
@@ -52,6 +51,7 @@ services:
       - clickhouse
     environment:
       ANALYTICS_ADDR: ":8787"
+      ANALYTICS_ALLOWED_ORIGIN: http://localhost:5173
       CLICKHOUSE_ADDR: clickhouse:9000
       CLICKHOUSE_PASSWORD: clickhouse
       ICEBERG_REST_URL: http://rest:8181
@@ -60,4 +60,4 @@ services:
       AWS_REGION: us-east-1
       AWS_S3_ENDPOINT: http://minio:9000
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"

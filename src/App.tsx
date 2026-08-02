@@ -82,6 +82,7 @@ function App() {
   const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsSyncStatus>('unknown')
   const [simulatingSeason, setSimulatingSeason] = useState(false)
   const [seasonSyncProgress, setSeasonSyncProgress] = useState<SeasonSyncProgress>()
+  const [saveMessage, setSaveMessage] = useState('')
 
   const selectedClub = useMemo(() => getClub(state, state.selectedClubId), [state])
   const sortedStandings = useMemo(() => getSortedStandings(state.standings), [state.standings])
@@ -143,7 +144,13 @@ function App() {
   }
 
   function save() {
-    setState((current) => saveCareer(current))
+    try {
+      setState((current) => saveCareer(current))
+      setSaveMessage('Saved locally')
+    } catch {
+      setSaveMessage('Save failed: browser storage is full')
+    }
+    window.setTimeout(() => setSaveMessage(''), 2400)
   }
 
   function reset() {
@@ -176,6 +183,7 @@ function App() {
           <IconButton label="Save" onClick={save}>
             <Save size={18} />
           </IconButton>
+          {saveMessage && <span className="save-feedback">{saveMessage}</span>}
           <IconButton label="Reset" onClick={reset}>
             <RotateCcw size={18} />
           </IconButton>
@@ -248,6 +256,7 @@ function App() {
           status={analyticsStatus}
           seasonSyncProgress={seasonSyncProgress}
           localResults={state.results}
+          onStatusChange={setAnalyticsStatus}
         />
       )}
     </main>
@@ -1010,38 +1019,45 @@ function AnalyticsView({
   status,
   seasonSyncProgress,
   localResults,
+  onStatusChange,
 }: {
   clubId: string
   runId: string
   status: AnalyticsSyncStatus
   seasonSyncProgress?: SeasonSyncProgress
   localResults: MatchResult[]
+  onStatusChange: (status: AnalyticsSyncStatus) => void
 }) {
   const [summary, setSummary] = useState<AnalyticsSummary>()
   const [loadedKey, setLoadedKey] = useState('')
   const [error, setError] = useState(false)
   const requestKey = `${clubId}:${runId}:${localResults.length}`
-  const loading = loadedKey !== requestKey
+  const loading = loadedKey !== requestKey && !summary
 
   useEffect(() => {
     let active = true
+    if (status === 'syncing') return () => {
+      active = false
+    }
     void fetchAnalyticsSummary(clubId, runId)
       .then((nextSummary) => {
         if (!active) return
         setSummary(nextSummary)
         setError(false)
         setLoadedKey(requestKey)
+        onStatusChange('online')
       })
       .catch(() => {
         if (!active) return
         setError(true)
         setLoadedKey(requestKey)
+        onStatusChange('offline')
       })
 
     return () => {
       active = false
     }
-  }, [clubId, requestKey, runId])
+  }, [clubId, onStatusChange, requestKey, runId, status])
 
   const statusLabel =
     status === 'syncing'
