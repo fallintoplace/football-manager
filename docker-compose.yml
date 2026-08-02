@@ -36,6 +36,8 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:26.2
+    environment:
+      CLICKHOUSE_PASSWORD: clickhouse
     ports:
       - "8123:8123"
       - "9002:9000"
@@ -50,6 +52,7 @@ services:
     environment:
       ANALYTICS_ADDR: ":8787"
       CLICKHOUSE_ADDR: clickhouse:9000
+      CLICKHOUSE_PASSWORD: clickhouse
       ICEBERG_REST_URL: http://rest:8181
       AWS_ACCESS_KEY_ID: admin
       AWS_SECRET_ACCESS_KEY: password
