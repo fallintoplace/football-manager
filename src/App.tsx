@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDot,
   ClipboardList,
+  Database,
   Dumbbell,
   Gauge,
   ListChecks,
@@ -23,7 +24,7 @@ import {
 import './App.css'
 import { PitchCanvas } from './components/PitchCanvas'
 import {
-  advanceMatchday,
+  advanceMatchdayWithResults,
   changeSelectedClub,
   getClub,
   getLastMatch,
@@ -39,11 +40,13 @@ import {
   updateTactic,
   updateTraining,
 } from './game/career'
+import { buildAnalyticsPayload, fetchAnalyticsSummary, ingestMatchday } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerScore, validateLineup } from './game/lineup'
+import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
 import type { CareerState, Formation, MatchResult, Mentality, PlayerPosition, Tactic, TrainingFocus } from './game/types'
 
-type Tab = 'club' | 'squad' | 'tactics' | 'match' | 'league'
+type Tab = 'club' | 'squad' | 'tactics' | 'match' | 'league' | 'analytics'
 
 const tabs: { id: Tab; label: string; Icon: typeof Gauge }[] = [
   { id: 'club', label: 'Matchday', Icon: Gauge },
@@ -51,6 +54,7 @@ const tabs: { id: Tab; label: string; Icon: typeof Gauge }[] = [
   { id: 'tactics', label: 'Tactics', Icon: Settings2 },
   { id: 'match', label: 'Match', Icon: CircleDot },
   { id: 'league', label: 'League', Icon: Trophy },
+  { id: 'analytics', label: 'Analytics', Icon: Database },
 ]
 
 const formations: Formation[] = ['4-2-3-1', '4-3-3', '4-4-2', '3-5-2']
@@ -61,6 +65,7 @@ const positionOrder: PlayerPosition[] = ['GK', 'DEF', 'MID', 'FWD']
 function App() {
   const [state, setState] = useState<CareerState>(() => loadCareer() ?? createInitialCareer())
   const [activeTab, setActiveTab] = useState<Tab>('club')
+  const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsSyncStatus>('unknown')
 
   const selectedClub = useMemo(() => getClub(state, state.selectedClubId), [state])
   const sortedStandings = useMemo(() => getSortedStandings(state.standings), [state.standings])
@@ -85,7 +90,14 @@ function App() {
       setActiveTab('club')
       return
     }
-    setState((current) => advanceMatchday(current))
+    const advanced = advanceMatchdayWithResults(state)
+    setState(advanced.state)
+    if (advanced.results.length) {
+      setAnalyticsStatus('syncing')
+      void ingestMatchday(buildAnalyticsPayload(advanced.state, advanced.results))
+        .then(() => setAnalyticsStatus('online'))
+        .catch(() => setAnalyticsStatus('offline'))
+    }
     setActiveTab('match')
   }
 
@@ -187,6 +199,8 @@ function App() {
       {activeTab === 'match' && <MatchView state={state} lastMatch={lastMatch} />}
 
       {activeTab === 'league' && <LeagueView state={state} standings={sortedStandings} />}
+
+      {activeTab === 'analytics' && <AnalyticsView clubId={selectedClub.id} status={analyticsStatus} localResults={state.results} />}
     </main>
   )
 }
@@ -871,6 +885,138 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
         </div>
       </section>
     </section>
+  )
+}
+
+function AnalyticsView({
+  clubId,
+  status,
+  localResults,
+}: {
+  clubId: string
+  status: AnalyticsSyncStatus
+  localResults: MatchResult[]
+}) {
+  const [summary, setSummary] = useState<AnalyticsSummary>()
+  const [loadedKey, setLoadedKey] = useState('')
+  const [error, setError] = useState(false)
+  const requestKey = `${clubId}:${localResults.length}`
+  const loading = loadedKey !== requestKey
+
+  useEffect(() => {
+    let active = true
+    void fetchAnalyticsSummary(clubId)
+      .then((nextSummary) => {
+        if (!active) return
+        setSummary(nextSummary)
+        setError(false)
+        setLoadedKey(requestKey)
+      })
+      .catch(() => {
+        if (!active) return
+        setError(true)
+        setLoadedKey(requestKey)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [clubId, requestKey])
+
+  const statusLabel = status === 'syncing' ? 'Syncing matchday' : status === 'online' ? 'ClickHouse connected' : status === 'offline' ? 'Analytics offline' : 'Waiting for first sync'
+
+  return (
+    <section className="single-view analytics-view">
+      <section className="panel wide-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Analytics Lab</p>
+            <h2>Touchline Data Room</h2>
+          </div>
+          <Database size={22} />
+        </div>
+        <div className={`analytics-status ${status}`}>
+          <span className="status-dot" />
+          <strong>{statusLabel}</strong>
+          <span>Arrow batches land in ClickHouse for live queries and Iceberg for replay history.</span>
+        </div>
+      </section>
+
+      {loading && <section className="panel"><p className="empty-state">Reading the latest match facts…</p></section>}
+
+      {!loading && error && (
+        <section className="panel wide-panel">
+          <div className="empty-state">
+            <strong>Analytics service not reachable.</strong>
+            <p>{localResults.length ? 'The game has local match data. Start the stack with docker compose up, then open this tab again.' : 'Play a matchday after starting the local analytics stack to populate this view.'}</p>
+          </div>
+        </section>
+      )}
+
+      {!loading && !error && summary && (
+        <>
+          <section className="analytics-grid">
+            <Metric icon={<CircleDot size={17} />} label="Matches" value={summary.matches} />
+            <Metric icon={<ClipboardList size={17} />} label="Events" value={summary.events} />
+            <Metric icon={<Activity size={17} />} label="Replay frames" value={summary.frames} />
+            <Metric icon={<BarChart3 size={17} />} label="Avg xG" value={summary.averageXg.toFixed(2)} />
+          </section>
+
+          <section className="panel wide-panel">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Selected Club</p>
+                <h2>Performance footprint</h2>
+              </div>
+              <BarChart3 size={20} />
+            </div>
+            <div className="tempo-row">
+              <ValueBar label="Average possession" value={summary.averagePossession} />
+              <ValueBar label="Stored matches" value={Math.min(100, summary.matches * 10)} suffix={String(summary.matches)} />
+              <ValueBar label="Event density" value={summary.matches ? Math.min(100, summary.events / summary.matches * 4) : 0} suffix={summary.matches ? `${(summary.events / summary.matches).toFixed(1)} / match` : '0 / match'} />
+            </div>
+          </section>
+
+          <section className="panel wide-panel">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Player Form</p>
+                <h2>Ratings from the fact table</h2>
+              </div>
+              <Users size={20} />
+            </div>
+            <PlayerFormTable players={summary.players} />
+          </section>
+        </>
+      )}
+    </section>
+  )
+}
+
+function PlayerFormTable({ players }: { players: AnalyticsPlayer[] }) {
+  if (!players.length) return <p className="empty-state">No player ratings have landed yet.</p>
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Matches</th>
+            <th>Average rating</th>
+          </tr>
+        </thead>
+        <tbody>
+          {players.map((player) => (
+            <tr key={player.playerId}>
+              <td><strong>{player.playerName}</strong></td>
+              <td>{player.matches}</td>
+              <td><InlineMeter value={Math.round(player.averageRating * 10)} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 

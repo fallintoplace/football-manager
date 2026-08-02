@@ -114,24 +114,36 @@ export function toggleStarter(state: CareerState, playerId: string): CareerState
   })
 }
 
+export type MatchdayAdvance = {
+  state: CareerState
+  results: MatchResult[]
+}
+
 export function advanceMatchday(state: CareerState): CareerState {
+  return advanceMatchdayWithResults(state).state
+}
+
+export function advanceMatchdayWithResults(state: CareerState): MatchdayAdvance {
   if (state.roundIndex >= state.fixtures.length) {
-    return startNextSeason(state)
+    return { state: startNextSeason(state), results: [] }
   }
 
   const lineup = validateLineup(getClub(state, state.selectedClubId), state.tactic, state.starterIds)
   if (!lineup.isLegal) {
     return {
-      ...state,
-      news: [
-        {
-          id: `illegal-lineup-${state.roundIndex}-${lineup.warnings.length}`,
-          tone: 'bad',
-          title: 'Team Sheet Blocked',
-          body: lineup.warnings[0] ?? 'The starting XI does not match the selected formation.',
-        },
-        ...state.news.slice(0, 7),
-      ],
+      state: {
+        ...state,
+        news: [
+          {
+            id: `illegal-lineup-${state.roundIndex}-${lineup.warnings.length}`,
+            tone: 'bad',
+            title: 'Team Sheet Blocked',
+            body: lineup.warnings[0] ?? 'The starting XI does not match the selected formation.',
+          },
+          ...state.news.slice(0, 7),
+        ],
+      },
+      results: [],
     }
   }
 
@@ -147,13 +159,16 @@ export function advanceMatchday(state: CareerState): CareerState {
   const news = buildNews(state, clubs, roundResults, selectedResult)
 
   return {
-    ...state,
-    clubs,
-    standings,
-    results: [...state.results, ...roundResults],
-    roundIndex: state.roundIndex + 1,
-    lastMatchId: selectedResult?.fixtureId ?? state.lastMatchId,
-    news,
+    state: {
+      ...state,
+      clubs,
+      standings,
+      results: [...state.results, ...roundResults],
+      roundIndex: state.roundIndex + 1,
+      lastMatchId: selectedResult?.fixtureId ?? state.lastMatchId,
+      news,
+    },
+    results: roundResults,
   }
 }
 

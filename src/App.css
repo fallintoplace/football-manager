@@ -188,7 +188,7 @@ button {
 
 .tabbar {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 1px;
   border-top: 0;
   border-radius: 0 0 8px 8px;
@@ -810,6 +810,62 @@ button {
   background: #25784d;
 }
 
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.analytics-grid .metric {
+  min-height: 76px;
+}
+
+.analytics-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 0.84rem;
+}
+
+.analytics-status strong {
+  color: var(--ink-strong);
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.analytics-status.online .status-dot {
+  background: var(--positive);
+}
+
+.analytics-status.syncing .status-dot {
+  background: var(--warning);
+}
+
+.analytics-status.offline .status-dot {
+  background: var(--negative);
+}
+
+.analytics-table {
+  min-width: 0;
+}
+
 .stat-duel {
   display: grid;
   gap: 6px;
@@ -952,6 +1008,10 @@ button {
   .player-picker {
     grid-template-columns: 1fr;
   }
+
+  .analytics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {
@@ -987,7 +1047,7 @@ button {
   }
 
   .tabbar {
-    grid-template-columns: repeat(5, minmax(48px, 1fr));
+    grid-template-columns: repeat(6, minmax(48px, 1fr));
   }
 
   .tab {
