@@ -119,6 +119,12 @@ export type MatchdayAdvance = {
   results: MatchResult[]
 }
 
+export type SeasonSimulation = {
+  state: CareerState
+  results: MatchResult[]
+  matchdays: MatchResult[][]
+}
+
 export function advanceMatchday(state: CareerState): CareerState {
   return advanceMatchdayWithResults(state).state
 }
@@ -170,6 +176,47 @@ export function advanceMatchdayWithResults(state: CareerState): MatchdayAdvance 
     },
     results: roundResults,
   }
+}
+
+export function simulateSeasonWithResults(state: CareerState): SeasonSimulation {
+  if (state.roundIndex >= state.fixtures.length) {
+    return { state, results: [], matchdays: [] }
+  }
+
+  let current = state
+  const results: MatchResult[] = []
+  const matchdays: MatchResult[][] = []
+  let finalSelectedResult: MatchResult | undefined
+
+  while (current.roundIndex < current.fixtures.length) {
+    const advanced = advanceMatchdayWithResults(current)
+    if (!advanced.results.length || advanced.state.roundIndex === current.roundIndex) {
+      return { state: current, results, matchdays }
+    }
+
+    const selectedResult = advanced.results.find(
+      (result) => result.homeId === state.selectedClubId || result.awayId === state.selectedClubId,
+    )
+    if (selectedResult) finalSelectedResult = selectedResult
+
+    results.push(...advanced.results.map((result) => compactResult(result, state.selectedClubId)))
+    matchdays.push(advanced.results.map((result) => compactResult(result, state.selectedClubId)))
+    current = {
+      ...advanced.state,
+      results: [...current.results, ...advanced.results.map((result) => ({ ...result, trace: [] }))],
+    }
+  }
+
+  if (finalSelectedResult) {
+    current = {
+      ...current,
+      results: current.results.map((result) =>
+        result.fixtureId === finalSelectedResult?.fixtureId ? finalSelectedResult : result,
+      ),
+    }
+  }
+
+  return { state: current, results, matchdays }
 }
 
 export function getSortedStandings(standings: Standing[]) {
@@ -243,6 +290,11 @@ function applyResultsToStandings(standings: Standing[], results: MatchResult[]) 
   }
 
   return next
+}
+
+function compactResult(result: MatchResult, selectedClubId: string): MatchResult {
+  const belongsToSelectedClub = result.homeId === selectedClubId || result.awayId === selectedClubId
+  return belongsToSelectedClub ? result : { ...result, trace: [] }
 }
 
 function applyTraining(club: Club, focus: TrainingFocus, tactic: Tactic): Club {

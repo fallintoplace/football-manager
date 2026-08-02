@@ -295,6 +295,13 @@ button {
   margin-bottom: 12px;
 }
 
+.command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .primary-action {
   display: inline-flex;
   align-items: center;
@@ -1157,5 +1164,15 @@ button {
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .command-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .command-actions .primary-action,
+  .command-actions .secondary-action {
+    flex: 1;
   }
 }

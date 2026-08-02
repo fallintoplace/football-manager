@@ -9,6 +9,7 @@ A fast football management prototype focused on visible tactical consequences, s
 - Matchday Hub with opponent brief, readiness checks, tactical plan, and team sheet
 - Manual starting XI selection with legal formation validation
 - One-click recommended XI
+- One-click full-season simulation that fills the remaining 38-match league schedule and lands on the final table
 - Tactical controls for formation, mentality, pressing, tempo, and defensive line
 - Training focus that affects player attributes, morale, and fitness
 - Phase-based match simulation with buildup, midfield duels, final-third entries, box entries, counters, xG, pressure, and tactical reports

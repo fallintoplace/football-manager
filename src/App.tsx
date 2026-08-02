@@ -11,6 +11,7 @@ import {
   Database,
   Dumbbell,
   ExternalLink,
+  FastForward,
   Gauge,
   ListChecks,
   Play,
@@ -35,6 +36,7 @@ import {
   recommendStarters,
   resetCareer,
   saveCareer,
+  simulateSeasonWithResults,
   teamAverage,
   toggleStarter,
   updateCaptain,
@@ -67,6 +69,7 @@ function App() {
   const [state, setState] = useState<CareerState>(() => loadCareer() ?? createInitialCareer())
   const [activeTab, setActiveTab] = useState<Tab>('club')
   const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsSyncStatus>('unknown')
+  const [simulatingSeason, setSimulatingSeason] = useState(false)
 
   const selectedClub = useMemo(() => getClub(state, state.selectedClubId), [state])
   const sortedStandings = useMemo(() => getSortedStandings(state.standings), [state.standings])
@@ -100,6 +103,27 @@ function App() {
         .catch(() => setAnalyticsStatus('offline'))
     }
     setActiveTab('match')
+  }
+
+  function simulateSeason() {
+    if (!canPlay || seasonComplete || simulatingSeason) {
+      if (!canPlay) setActiveTab('club')
+      return
+    }
+
+    setSimulatingSeason(true)
+    window.setTimeout(() => {
+      const simulation = simulateSeasonWithResults(state)
+      setState(simulation.state)
+      setActiveTab('league')
+      if (simulation.results.length) {
+        setAnalyticsStatus('syncing')
+        void ingestSeason(simulation.state, simulation.matchdays)
+          .then(() => setAnalyticsStatus('online'))
+          .catch(() => setAnalyticsStatus('offline'))
+      }
+      setSimulatingSeason(false)
+    }, 0)
   }
 
   function save() {
@@ -171,7 +195,9 @@ function App() {
           tactic={state.tactic}
           captainId={state.captainId}
           canPlay={canPlay}
+          simulatingSeason={simulatingSeason}
           onPlay={playMatchday}
+          onSimSeason={simulateSeason}
           onTactic={(tactic) => setState((current) => updateTactic(current, tactic))}
           onTraining={(focus) => setState((current) => updateTraining(current, focus))}
           onCaptain={(playerId) => setState((current) => updateCaptain(current, playerId))}
@@ -221,6 +247,12 @@ function ClubBadge({
   )
 }
 
+async function ingestSeason(state: CareerState, matchdays: MatchResult[][]) {
+  for (const results of matchdays) {
+    await ingestMatchday(buildAnalyticsPayload(state, results))
+  }
+}
+
 function ClubView({
   state,
   selectedClub,
@@ -231,7 +263,9 @@ function ClubView({
   tactic,
   captainId,
   canPlay,
+  simulatingSeason,
   onPlay,
+  onSimSeason,
   onTactic,
   onTraining,
   onCaptain,
@@ -248,7 +282,9 @@ function ClubView({
   tactic: Tactic
   captainId: string
   canPlay: boolean
+  simulatingSeason: boolean
   onPlay: () => void
+  onSimSeason: () => void
   onTactic: (tactic: Partial<Tactic>) => void
   onTraining: (focus: TrainingFocus) => void
   onCaptain: (playerId: string) => void
@@ -269,10 +305,21 @@ function ClubView({
             <p className="eyebrow">Matchday Hub</p>
             <h2>{upcomingLabel}</h2>
           </div>
-          <button className="primary-action" type="button" onClick={onPlay} disabled={!canPlay}>
-            <Play size={18} />
-            <span>{seasonComplete ? 'Start Season' : 'Play Matchday'}</span>
-          </button>
+          <div className="command-actions">
+            <button className="primary-action" type="button" onClick={onPlay} disabled={!canPlay}>
+              <Play size={18} />
+              <span>{seasonComplete ? 'Start Season' : 'Play Matchday'}</span>
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={onSimSeason}
+              disabled={!canPlay || seasonComplete || simulatingSeason}
+            >
+              <FastForward size={18} />
+              <span>{simulatingSeason ? 'Simulating…' : 'Sim Season'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="fixture-line">
