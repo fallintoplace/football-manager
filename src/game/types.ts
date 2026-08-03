@@ -108,6 +108,45 @@ export type MatchEvent = {
   xg?: number
 }
 
+export type MatchActionType =
+  | 'pass'
+  | 'carry'
+  | 'shot'
+  | 'tackle'
+  | 'interception'
+  | 'recovery'
+  | 'clearance'
+  | 'block'
+  | 'duel'
+  | 'foul'
+  | 'card'
+  | 'offside'
+  | 'keeper_action'
+  | 'substitution'
+
+export type MatchActionOutcome = 'successful' | 'unsuccessful' | 'neutral'
+
+export type MatchActionQualifierValue = string | number | boolean
+
+export type MatchAction = {
+  id: string
+  matchId: string
+  sequenceId: string
+  possessionId: string
+  period: 1 | 2
+  second: number
+  teamId: string
+  playerId: string
+  recipientPlayerId?: string
+  type: MatchActionType
+  outcome: MatchActionOutcome
+  startX: number
+  startY: number
+  endX?: number
+  endY?: number
+  qualifiers: Record<string, MatchActionQualifierValue>
+}
+
 export type MatchPhase = 'build' | 'midfield' | 'final-third' | 'box' | 'transition' | 'shot'
 
 export type PlayerIntent = 'hold' | 'press' | 'support' | 'run' | 'mark' | 'recover' | 'shoot'
@@ -150,6 +189,43 @@ export type MatchMetrics = {
   homePressure: number
   awayPressure: number
   homeTerritory: number
+  homePossessions: number
+  awayPossessions: number
+  homeFinalThirdEntries: number
+  awayFinalThirdEntries: number
+  homeBoxEntries: number
+  awayBoxEntries: number
+  homePressWins: number
+  awayPressWins: number
+  homeBuildUpFails: number
+  awayBuildUpFails: number
+  homeMidfieldWins: number
+  awayMidfieldWins: number
+  homeLineBreaks: number
+  awayLineBreaks: number
+  homeBallsBehind: number
+  awayBallsBehind: number
+  homeCounters: number
+  awayCounters: number
+  homeSaves: number
+  awaySaves: number
+  homeCards: number
+  awayCards: number
+  homeLateFatigueLosses: number
+  awayLateFatigueLosses: number
+}
+
+export type MatchTactics = {
+  home: Tactic
+  away: Tactic
+}
+
+export type PlayerMatchStats = {
+  started: boolean
+  minutesPlayed: number
+  goals: number
+  shots: number
+  xg: number
 }
 
 export type MatchResult = {
@@ -160,8 +236,11 @@ export type MatchResult = {
   homeGoals: number
   awayGoals: number
   events: MatchEvent[]
+  actions: MatchAction[]
   trace: MatchFrame[]
   metrics: MatchMetrics
+  tactics: MatchTactics
+  playerStats: Record<string, PlayerMatchStats>
   report: string[]
   playerRatings: Record<string, number>
 }

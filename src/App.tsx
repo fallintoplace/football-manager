@@ -14,6 +14,7 @@ import {
   FastForward,
   Gauge,
   ListChecks,
+  MapPin,
   Play,
   RotateCcw,
   Save,
@@ -44,17 +45,29 @@ import {
   updateTactic,
   updateTraining,
 } from './game/career'
-import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, fetchAnalyticsTimeline, ingestMatchday, seasonRunId } from './game/analytics'
+import { buildAnalyticsPayload, clickhouseUiUrl, fetchActionInsights, fetchAnalyticsRuns, fetchAnalyticsSummary, fetchAnalyticsTimeline, fetchIcebergHistory, fetchRealDataMatch, fetchRealDataMatches, fetchSeasonComparison, fetchTacticalMatchups, fetchWorldCup2026Overview, ingestMatchday, seasonRunId } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerAttributeSummary, playerOverall, playerScore, validateLineup } from './game/lineup'
 import type {
   AnalyticsDevelopmentPlayer,
+  ActionInsights,
   AnalyticsPlayer,
+  AnalyticsRun,
+  AnalyticsSeasonComparison,
   AnalyticsSummary,
   AnalyticsSyncStatus,
   AnalyticsTimeline,
   AnalyticsTimelinePoint,
   AnalyticsTimelineStanding,
+  IcebergHistory,
+  RealMatchExplorer,
+  RealMatchSummary,
+  RealPassNetworkLink,
+  RealPlayerProfile,
+  RealShot,
+  TacticalMatchup,
+  WorldCup2026MatchSummary,
+  WorldCup2026Overview,
 } from './game/analytics'
 import type {
   CareerState,
@@ -1050,7 +1063,12 @@ function AnalyticsView({
   onOpenMatch: (matchId: string) => void
 }) {
   const [summary, setSummary] = useState<AnalyticsSummary>()
+  const [actionInsights, setActionInsights] = useState<ActionInsights>()
   const [timeline, setTimeline] = useState<AnalyticsTimeline>()
+  const [runInfo, setRunInfo] = useState<AnalyticsRun>()
+  const [seasonComparison, setSeasonComparison] = useState<AnalyticsSeasonComparison[]>([])
+  const [tacticalMatchups, setTacticalMatchups] = useState<TacticalMatchup[]>([])
+  const [icebergHistory, setIcebergHistory] = useState<IcebergHistory>()
   const [loadedKey, setLoadedKey] = useState('')
   const [error, setError] = useState(false)
   const requestKey = `${clubId}:${runId}:${localResults.length}`
@@ -1068,16 +1086,19 @@ function AnalyticsView({
     () => (selectedPoint ? localResults.filter((result) => result.round === selectedPoint.round && (result.homeId === clubId || result.awayId === clubId)) : []),
     [clubId, localResults, selectedPoint],
   )
+  const playerNames = useMemo(() => new Map(selectedClub.squad.map((player) => [player.id, player.name])), [selectedClub.squad])
+  const comparisonCareerId = runInfo?.careerId ?? runId.split(':season:')[0]
 
   useEffect(() => {
     let active = true
     if (status === 'syncing') return () => {
       active = false
     }
-    void Promise.all([fetchAnalyticsSummary(clubId, runId), fetchAnalyticsTimeline(clubId, runId)])
-      .then(([nextSummary, nextTimeline]) => {
+    void Promise.all([fetchAnalyticsSummary(clubId, runId), fetchAnalyticsTimeline(clubId, runId), fetchActionInsights(runId, clubId)])
+      .then(([nextSummary, nextTimeline, nextActionInsights]) => {
         if (!active) return
         setSummary(nextSummary)
+        setActionInsights(nextActionInsights)
         setTimeline(nextTimeline)
         setError(false)
         setLoadedKey(requestKey)
@@ -1095,6 +1116,67 @@ function AnalyticsView({
       active = false
     }
   }, [clubId, onStatusChange, requestKey, runId, status])
+
+  useEffect(() => {
+    let active = true
+    void fetchAnalyticsRuns()
+      .then((runs) => {
+        if (!active) return
+        setRunInfo(runs.find((run) => run.runId === runId))
+      })
+      .catch(() => {
+        if (active) setRunInfo(undefined)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [localResults.length, runId, status])
+
+  useEffect(() => {
+    let active = true
+    void fetchSeasonComparison(comparisonCareerId, clubId)
+      .then((comparison) => {
+        if (active) setSeasonComparison(comparison)
+      })
+      .catch(() => {
+        if (active) setSeasonComparison([])
+      })
+
+    return () => {
+      active = false
+    }
+  }, [clubId, comparisonCareerId, localResults.length, status])
+
+  useEffect(() => {
+    let active = true
+    void fetchTacticalMatchups(runId, clubId)
+      .then((matchups) => {
+        if (active) setTacticalMatchups(matchups)
+      })
+      .catch(() => {
+        if (active) setTacticalMatchups([])
+      })
+
+    return () => {
+      active = false
+    }
+  }, [clubId, localResults.length, runId, status])
+
+  useEffect(() => {
+    let active = true
+    void fetchIcebergHistory()
+      .then((history) => {
+        if (active) setIcebergHistory(history)
+      })
+      .catch(() => {
+        if (active) setIcebergHistory(undefined)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [localResults.length, status])
 
   const statusLabel =
     status === 'syncing'
@@ -1128,8 +1210,24 @@ function AnalyticsView({
         <div className="analytics-run-id">
           <span>Season run</span>
           <code>{runId}</code>
+          {runInfo && (
+            <span className="analytics-run-meta">
+              {runInfo.status === 'complete' ? 'Season complete' : `Round ${runInfo.roundsCompleted} synced`} · schema v{runInfo.schemaVersion}
+            </span>
+          )}
         </div>
+        {icebergHistory && (
+          <div className="analytics-run-id">
+            <span>Iceberg history</span>
+            <span className="analytics-run-meta">
+              {icebergHistory.snapshots.length} snapshot{icebergHistory.snapshots.length === 1 ? '' : 's'} · {icebergHistory.table}
+            </span>
+          </div>
+        )}
       </section>
+
+      <RealDataExplorerPanel />
+      <WorldCup2026Panel />
 
       {loading && <section className="panel"><p className="empty-state">Reading the latest match facts…</p></section>}
 
@@ -1174,6 +1272,48 @@ function AnalyticsView({
             <Metric icon={<Activity size={17} />} label="Replay frames" value={summary.frames} />
             <Metric icon={<BarChart3 size={17} />} label="Avg xG" value={summary.averageXg.toFixed(2)} />
           </section>
+
+          {actionInsights && (
+            <section className="panel wide-panel action-insights-panel">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Action intelligence</p>
+                  <h2>What the team actually did</h2>
+                </div>
+                <Activity size={20} />
+              </div>
+              <div className="action-insights-metrics">
+                <Metric icon={<ClipboardList size={16} />} label="Actions" value={actionInsights.actions} />
+                <Metric icon={<CircleDot size={16} />} label="Possessions" value={actionInsights.possessions} />
+                <Metric icon={<CheckCircle2 size={16} />} label="Pass completion" value={`${actionInsights.passCompletion.toFixed(1)}%`} />
+                <Metric icon={<Target size={16} />} label="Action xG" value={actionInsights.xg.toFixed(2)} />
+              </div>
+              {actionInsights.actions > 0 ? (
+                <>
+                  <div className="action-insights-columns">
+                    <div>
+                      <p className="eyebrow">Action mix</p>
+                      <ActionMixList rows={actionInsights.actionMix} />
+                    </div>
+                    <div>
+                      <p className="eyebrow">Passing connections</p>
+                      <PassNetworkTable links={actionInsights.passNetwork} playerNames={playerNames} />
+                    </div>
+                  </div>
+                  <div className="player-role-section">
+                    <p className="eyebrow">Player role map</p>
+                    <PlayerRoleTable profiles={actionInsights.playerProfiles} playerNames={playerNames} />
+                  </div>
+                </>
+              ) : (
+                <p className="empty-state">No structured actions have landed for this run yet. Play a matchday to populate this lab.</p>
+              )}
+              <div className="analytics-insight-note">
+                <AlertTriangle size={16} />
+                <span>{actionInsights.analystNote}</span>
+              </div>
+            </section>
+          )}
 
           {points.length > 0 && selectedPoint && (
             <>
@@ -1284,9 +1424,405 @@ function AnalyticsView({
             </div>
             <PlayerFormTable players={summary.players} />
           </section>
+
+          {seasonComparison.length > 0 && (
+            <section className="panel wide-panel">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Career archive</p>
+                  <h2>Season-over-season comparison</h2>
+                </div>
+                <CalendarDays size={20} />
+              </div>
+              <SeasonComparisonTable seasons={seasonComparison} />
+            </section>
+          )}
+
+          {tacticalMatchups.length > 0 && (
+            <section className="panel wide-panel">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Tactical matchup lab</p>
+                  <h2>How the game plan performed</h2>
+                </div>
+                <Shield size={20} />
+              </div>
+              <TacticalMatchupTable matchups={tacticalMatchups} clubsById={clubsById} />
+            </section>
+          )}
         </>
       )}
     </section>
+  )
+}
+
+function RealDataExplorerPanel() {
+  const [matches, setMatches] = useState<RealMatchSummary[]>([])
+  const [selectedMatchId, setSelectedMatchId] = useState('')
+  const [explorer, setExplorer] = useState<RealMatchExplorer>()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  function refreshMatches() {
+    setLoading(true)
+    setRefreshKey((value) => value + 1)
+  }
+
+  useEffect(() => {
+    let active = true
+    void fetchRealDataMatches('statsbomb', 2015)
+      .then((nextMatches) => {
+        if (!active) return
+        setMatches(nextMatches)
+        setSelectedMatchId((current) => nextMatches.some((match) => match.sourceMatchId === current) ? current : nextMatches[0]?.sourceMatchId ?? '')
+        setError(false)
+      })
+      .catch(() => {
+        if (!active) return
+        setMatches([])
+        setSelectedMatchId('')
+        setExplorer(undefined)
+        setError(true)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [refreshKey])
+
+  useEffect(() => {
+    let active = true
+    if (!selectedMatchId) return
+    void fetchRealDataMatch('statsbomb', selectedMatchId)
+      .then((nextExplorer) => {
+        if (active) setExplorer(nextExplorer)
+      })
+      .catch(() => {
+        if (active) setExplorer(undefined)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [selectedMatchId])
+
+  const selectedMatch = explorer?.match ?? matches.find((match) => match.sourceMatchId === selectedMatchId)
+
+  return (
+    <section className="panel wide-panel real-data-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Real event data</p>
+          <h2>Real Data Explorer</h2>
+          <p className="panel-copy">Explore normalized match actions from StatsBomb Open Data beside the ClickHouse season lab.</p>
+        </div>
+        <div className="real-data-source">
+          <span className="source-badge">StatsBomb Open Data</span>
+          <a href="https://github.com/hudl/open-data" target="_blank" rel="noreferrer">Source ↗</a>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="empty-state">Reading imported real matches…</p>
+      ) : error ? (
+        <div className="empty-state real-data-empty">
+          <strong>Real-data API unavailable.</strong>
+          <p>Start the local stack, then refresh this panel.</p>
+          <button className="secondary-action" type="button" onClick={refreshMatches}><RotateCcw size={16} />Retry</button>
+        </div>
+      ) : !matches.length ? (
+        <div className="empty-state real-data-empty">
+          <strong>No real matches imported yet.</strong>
+          <p>Run <code>node scripts/import-statsbomb.mjs --limit=20</code> from the project root, then refresh.</p>
+          <button className="secondary-action" type="button" onClick={refreshMatches}><RotateCcw size={16} />Refresh matches</button>
+        </div>
+      ) : selectedMatch ? (
+        <>
+          <div className="real-data-controls">
+            <label>
+              <span>Imported match</span>
+              <select className="real-data-select" value={selectedMatchId} onChange={(event) => setSelectedMatchId(event.target.value)}>
+                {matches.map((match) => (
+                  <option value={match.sourceMatchId} key={match.sourceMatchId}>
+                    {match.matchDate} · {match.homeTeamName} {match.homeScore}–{match.awayScore} {match.awayTeamName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="secondary-action" type="button" onClick={refreshMatches}><RotateCcw size={16} />Refresh</button>
+          </div>
+          <div className="real-data-metrics">
+            <Metric icon={<ClipboardList size={16} />} label="Actions" value={selectedMatch.actions} />
+            <Metric icon={<CircleDot size={16} />} label="Possessions" value={selectedMatch.possessions} />
+            <Metric icon={<Users size={16} />} label="Players" value={selectedMatch.players} />
+            <Metric icon={<Target size={16} />} label="Shot xG" value={selectedMatch.xg.toFixed(2)} />
+          </div>
+          {explorer ? (
+            <div className="real-data-grid">
+              <RealShotMap shots={explorer.shots} homeTeamName={selectedMatch.homeTeamName} />
+              <RealPassNetworkTable links={explorer.passNetwork} homeTeamName={selectedMatch.homeTeamName} />
+              <RealPlayerProfileTable profiles={explorer.playerProfiles} />
+            </div>
+          ) : (
+            <p className="empty-state">Loading match actions…</p>
+          )}
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+function RealShotMap({ shots, homeTeamName }: { shots: RealShot[]; homeTeamName: string }) {
+  return (
+    <div className="real-shot-map">
+      <div className="real-data-subheading"><span><p className="eyebrow">Shot map</p><strong>Where chances came from</strong></span><span className="real-data-legend"><i className="home" />Home <i className="away" />Away</span></div>
+      {shots.length ? (
+        <svg viewBox="0 0 100 64" role="img" aria-label="Real match shot map">
+          <rect className="real-shot-map-pitch" x="0" y="0" width="100" height="64" rx="2" />
+          <line x1="50" x2="50" y1="0" y2="64" className="real-shot-map-line" />
+          <circle cx="50" cy="32" r="8" className="real-shot-map-line" />
+          <circle cx="50" cy="32" r="0.8" className="real-shot-map-mark" />
+          <rect x="0" y="16" width="16" height="32" className="real-shot-map-line" />
+          <rect x="84" y="16" width="16" height="32" className="real-shot-map-line" />
+          <rect x="0" y="24" width="6" height="16" className="real-shot-map-line" />
+          <rect x="94" y="24" width="6" height="16" className="real-shot-map-line" />
+          {shots.map((shot, index) => {
+            const isHome = shot.teamName === homeTeamName
+            const y = shot.startY * 0.64
+            const radius = Math.max(1.2, Math.min(3.2, 1.2 + shot.xg * 5))
+            return (
+              <circle className={isHome ? 'real-shot home' : 'real-shot away'} cx={shot.startX} cy={y} r={radius} key={`${shot.playerName}-${shot.second}-${index}`}>
+                <title>{`${shot.playerName} · ${shot.xg.toFixed(2)} xG · ${shot.outcome}`}</title>
+              </circle>
+            )
+          })}
+        </svg>
+      ) : <p className="empty-state">No shot events in this match.</p>}
+    </div>
+  )
+}
+
+function RealPassNetworkTable({ links, homeTeamName }: { links: RealPassNetworkLink[]; homeTeamName: string }) {
+  if (!links.length) return <div className="real-data-table-card"><p className="eyebrow">Passing connections</p><p className="empty-state">No recipient links available.</p></div>
+
+  return (
+    <div className="real-data-table-card">
+      <div className="real-data-subheading"><span><p className="eyebrow">Passing connections</p><strong>Top player links</strong></span><Activity size={18} /></div>
+      <div className="table-wrap">
+        <table className="data-table compact-table">
+          <thead><tr><th>Team</th><th>Passer → receiver</th><th>Comp.</th></tr></thead>
+          <tbody>
+            {links.map((link) => (
+              <tr key={`${link.teamName}-${link.passer}-${link.receiver}`}>
+                <td><span className={link.teamName === homeTeamName ? 'positive-text' : 'negative-text'}>{link.teamName}</span></td>
+                <td><strong>{link.passer}</strong><span className="table-subtext"> → {link.receiver}</span></td>
+                <td>{link.completions}/{link.attempts} <span className="table-subtext">{link.completionRate.toFixed(0)}%</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function RealPlayerProfileTable({ profiles }: { profiles: RealPlayerProfile[] }) {
+  if (!profiles.length) return <div className="real-data-table-card"><p className="eyebrow">Player profiles</p><p className="empty-state">No player actions available.</p></div>
+
+  return (
+    <div className="real-data-table-card real-player-table-card">
+      <div className="real-data-subheading"><span><p className="eyebrow">Player profiles</p><strong>Match activity ledger</strong></span><UserCheck size={18} /></div>
+      <div className="table-wrap">
+        <table className="data-table compact-table">
+          <thead><tr><th>Player</th><th>Passes</th><th>Carries</th><th>Shots</th><th>Def.</th><th>xG</th></tr></thead>
+          <tbody>
+            {profiles.map((profile) => (
+              <tr key={profile.playerId}>
+                <td><strong>{profile.playerName}</strong><span className="table-subtext">{profile.teamName}</span></td>
+                <td>{profile.completedPasses}/{profile.passes}</td>
+                <td>{profile.carries}</td>
+                <td>{profile.shots}</td>
+                <td>{profile.defensiveActions}</td>
+                <td>{profile.xg.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function WorldCup2026Panel() {
+  const [overview, setOverview] = useState<WorldCup2026Overview>()
+  const [group, setGroup] = useState('Group A')
+  const [round, setRound] = useState('all')
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void fetchWorldCup2026Overview()
+      .then((nextOverview) => {
+        if (!active) return
+        setOverview(nextOverview)
+        setError(false)
+      })
+      .catch(() => {
+        if (active) setError(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const groups = useMemo(() => [...new Set((overview?.teams ?? []).map((team) => team.groupName).filter(Boolean))].sort(), [overview?.teams])
+  const knockoutRounds = ['Round of 32', 'Round of 16', 'Quarter-final', 'Semi-final', 'Match for third place', 'Final']
+  const groupTeams = overview?.teams.filter((team) => team.groupName === group) ?? []
+  const bracketMatches = overview?.matches.filter((match) => !match.groupName && (round === 'all' || match.round === round)) ?? []
+  const finalMatch = overview?.matches.find((match) => match.round === 'Final')
+  const maxScorerGoals = Math.max(...(overview?.topScorers ?? []).map((scorer) => scorer.goals), 1)
+  const maxTimingGoals = Math.max(...(overview?.goalTiming ?? []).map((bucket) => bucket.goals), 1)
+
+  return (
+    <section className="panel wide-panel worldcup-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Tournament intelligence</p>
+          <h2>FIFA World Cup 2026</h2>
+          <p className="panel-copy">A ClickHouse-backed view of the 104-match tournament, from group tables to the final goal.</p>
+        </div>
+        <div className="real-data-source">
+          <span className="source-badge">Openfootball · CC0</span>
+          <a href="https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/statistics" target="_blank" rel="noreferrer">FIFA stats ↗</a>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="empty-state">World Cup data is not imported yet. Run <code>node scripts/import-worldcup2026.mjs</code> after starting the analytics stack.</p>
+      ) : !overview ? (
+        <p className="empty-state">Crunching World Cup matches from ClickHouse…</p>
+      ) : (
+        <>
+          <div className="worldcup-summary-grid">
+            <Metric icon={<CalendarDays size={16} />} label="Matches" value={overview.summary.matches} />
+            <Metric icon={<Users size={16} />} label="Teams" value={overview.summary.teams} />
+            <Metric icon={<Target size={16} />} label="Goals" value={overview.summary.goals} />
+            <Metric icon={<BarChart3 size={16} />} label="Goals / match" value={overview.summary.averageGoals.toFixed(2)} />
+            <Metric icon={<CircleDot size={16} />} label="Venues" value={overview.summary.venues} />
+          </div>
+
+          <div className="worldcup-champion-card">
+            <div>
+              <p className="eyebrow">Final</p>
+              <h3>{overview.summary.champion} are world champions</h3>
+              <p>{overview.summary.runnerUp} · {finalMatch?.homeTeam} {finalMatch?.homeGoals}-{finalMatch?.awayGoals} {finalMatch?.awayTeam} after extra time</p>
+            </div>
+            <Trophy size={28} />
+          </div>
+
+          <div className="worldcup-main-grid">
+            <section className="worldcup-card">
+              <div className="worldcup-card-heading">
+                <div><p className="eyebrow">Group stage</p><strong>Standings explorer</strong></div>
+                <select value={group} onChange={(event) => setGroup(event.target.value)} aria-label="Select World Cup group">
+                  {groups.map((groupName) => <option value={groupName} key={groupName}>{groupName}</option>)}
+                </select>
+              </div>
+              <div className="table-wrap">
+                <table className="data-table compact-table worldcup-table">
+                  <thead><tr><th>#</th><th>Team</th><th>Pl</th><th>W-D-L</th><th>GD</th><th>Pts</th></tr></thead>
+                  <tbody>
+                    {groupTeams.map((team) => (
+                      <tr key={team.teamName}>
+                        <td><strong>{team.rank}</strong></td>
+                        <td><strong>{team.teamName}</strong><span className="table-subtext">{team.stage}</span></td>
+                        <td>{team.played}</td>
+                        <td>{team.won}-{team.drawn}-{team.lost}</td>
+                        <td className={team.goalDifference >= 0 ? 'positive-text' : 'negative-text'}>{team.goalDifference > 0 ? '+' : ''}{team.goalDifference}</td>
+                        <td><strong>{team.points}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="worldcup-card">
+              <div className="worldcup-card-heading"><div><p className="eyebrow">Golden boot race</p><strong>Top scorers</strong></div><Target size={18} /></div>
+              <div className="worldcup-bars">
+                {overview.topScorers.slice(0, 8).map((scorer) => (
+                  <div className="worldcup-bar-row" key={`${scorer.teamName}-${scorer.playerName}`}>
+                    <div className="worldcup-bar-label"><strong>{scorer.playerName}</strong><span>{scorer.teamName} · {scorer.penaltyGoals} pens</span></div>
+                    <div className="worldcup-bar-track"><i style={{ width: `${scorer.goals / maxScorerGoals * 100}%` }} /></div>
+                    <strong>{scorer.goals}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <div className="worldcup-lower-grid">
+            <section className="worldcup-card">
+              <div className="worldcup-card-heading"><div><p className="eyebrow">When goals arrived</p><strong>Goal timing</strong></div><Activity size={18} /></div>
+              <div className="worldcup-timing-chart">
+                {overview.goalTiming.map((bucket) => (
+                  <div className="worldcup-timing-column" key={bucket.label}>
+                    <span>{bucket.goals}</span><i style={{ height: `${bucket.goals / maxTimingGoals * 100}%` }} /><small>{bucket.label}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="worldcup-card">
+              <div className="worldcup-card-heading"><div><p className="eyebrow">Host footprint</p><strong>Highest-scoring venues</strong></div><MapPin size={18} /></div>
+              <div className="worldcup-venue-list">
+                {overview.venues.slice(0, 6).map((venue) => <div className="worldcup-venue-row" key={venue.venue}><strong>{venue.venue}</strong><span>{venue.matches} matches · {venue.goals} goals · {venue.averageGoals.toFixed(2)} / match</span></div>)}
+              </div>
+            </section>
+          </div>
+
+          <section className="worldcup-card worldcup-bracket-card">
+            <div className="worldcup-card-heading">
+              <div><p className="eyebrow">Knockout path</p><strong>Bracket explorer</strong></div>
+              <select value={round} onChange={(event) => setRound(event.target.value)} aria-label="Select World Cup knockout round">
+                <option value="all">All knockout rounds</option>
+                {knockoutRounds.map((roundName) => <option value={roundName} key={roundName}>{roundName}</option>)}
+              </select>
+            </div>
+            <WorldCupBracket matches={bracketMatches} />
+          </section>
+        </>
+      )}
+    </section>
+  )
+}
+
+function WorldCupBracket({ matches }: { matches: WorldCup2026MatchSummary[] }) {
+  if (!matches.length) return <p className="empty-state">No knockout matches match this filter.</p>
+  const roundOrder = ['Round of 32', 'Round of 16', 'Quarter-final', 'Semi-final', 'Match for third place', 'Final']
+  return (
+    <div className="worldcup-bracket">
+      {roundOrder.map((round) => {
+        const roundMatches = matches.filter((match) => match.round === round)
+        if (!roundMatches.length) return null
+        return (
+          <div className="worldcup-bracket-column" key={round}>
+            <p className="eyebrow">{round}</p>
+            {roundMatches.map((match) => (
+              <div className={match.round === 'Final' ? 'worldcup-match-card final' : 'worldcup-match-card'} key={match.matchNumber}>
+                <span>#{match.matchNumber} · {match.venue}</span>
+                <strong>{match.homeTeam} <b>{match.homeGoals}</b></strong>
+                <strong>{match.awayTeam} <b>{match.awayGoals}</b></strong>
+                {match.penaltyShootout && <small>Pens {match.shootoutHomeGoals}-{match.shootoutAwayGoals}</small>}
+              </div>
+            ))}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1472,6 +2008,130 @@ function PlayerFormTable({ players }: { players: AnalyticsPlayer[] }) {
               <td><InlineMeter value={Math.round(player.averageRating * 10)} /></td>
             </tr>
           ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ActionMixList({ rows }: { rows: ActionInsights['actionMix'] }) {
+  const maximum = Math.max(...rows.map((row) => row.actions), 1)
+
+  return (
+    <div className="action-mix-list">
+      {rows.map((row) => (
+        <div className="action-mix-row" key={row.actionType}>
+          <div className="action-mix-label">
+            <strong>{row.actionType.replaceAll('-', ' ')}</strong>
+            <span>{row.successRate.toFixed(0)}% successful</span>
+          </div>
+          <i><b style={{ inlineSize: `${(row.actions / maximum) * 100}%` }} /></i>
+          <strong>{row.actions}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PassNetworkTable({ links, playerNames }: { links: ActionInsights['passNetwork']; playerNames: Map<string, string> }) {
+  if (!links.length) return <p className="empty-state">No repeat passing connections yet.</p>
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr><th>Passer</th><th>Receiver</th><th>Comp.</th><th>Progressive</th></tr>
+        </thead>
+        <tbody>
+          {links.map((link) => (
+            <tr key={`${link.passerId}-${link.receiverId}`}>
+              <td><strong>{playerNames.get(link.passerId) ?? link.passerId}</strong></td>
+              <td>{playerNames.get(link.receiverId) ?? link.receiverId}</td>
+              <td>{link.completions}/{link.attempts} <span className="table-subtext">{link.completionRate.toFixed(0)}%</span></td>
+              <td>{link.progressivePasses}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PlayerRoleTable({ profiles, playerNames }: { profiles: ActionInsights['playerProfiles']; playerNames: Map<string, string> }) {
+  if (!profiles.length) return <p className="empty-state">Player roles will appear after the action feed has landed.</p>
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr><th>Player</th><th>Primary role</th><th>Actions</th><th>Passing</th><th>Progression</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          {profiles.map((profile) => (
+            <tr key={profile.playerId}>
+              <td><strong>{playerNames.get(profile.playerId) ?? profile.playerId}</strong></td>
+              <td><span className="role-pill">{profile.primaryRole}</span></td>
+              <td>{profile.actions}</td>
+              <td>{profile.passes ? `${profile.completedPasses}/${profile.passes}` : '—'}{profile.passes > 0 && <span className="table-subtext">{profile.completionRate.toFixed(0)}%</span>}</td>
+              <td>{profile.progressiveActions}</td>
+              <td>{profile.shots > 0 ? `${profile.shots} shots · ${profile.xg.toFixed(2)} xG` : `${profile.defensiveActions} defensive`}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SeasonComparisonTable({ seasons }: { seasons: AnalyticsSeasonComparison[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr><th>Season</th><th>Finish</th><th>Points</th><th>Record</th><th>xG</th><th>Avg rating</th><th>Press wins</th></tr>
+        </thead>
+        <tbody>
+          {seasons.map((season) => (
+            <tr key={season.runId}>
+              <td><strong>{season.season}</strong><span className="table-subtext">{season.status === 'complete' ? 'Complete' : `Round ${season.lastRound + 1}`}</span></td>
+              <td>{season.rank ? `#${season.rank}` : '—'}</td>
+              <td><strong>{season.points}</strong></td>
+              <td>{season.won}-{season.drawn}-{season.lost}</td>
+              <td>{season.xgFor.toFixed(2)} / {season.xgAgainst.toFixed(2)}</td>
+              <td>{season.averageRating ? season.averageRating.toFixed(2) : '—'}</td>
+              <td>{season.averagePressWins.toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function TacticalMatchupTable({ matchups, clubsById }: { matchups: TacticalMatchup[]; clubsById: Map<string, Club> }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr><th>Opponent</th><th>Shape</th><th>Plan</th><th>Matches</th><th>xG</th><th>Possession</th><th>Press wins</th><th>Box entries</th><th>Counters</th></tr>
+        </thead>
+        <tbody>
+          {matchups.map((matchup) => {
+            const opponent = clubsById.get(matchup.opponentId)
+            return (
+              <tr key={`${matchup.opponentId}-${matchup.clubFormation}-${matchup.opponentFormation}`}>
+                <td><strong>{opponent?.name ?? matchup.opponentId}</strong><span>{matchup.opponentFormation} · {matchup.opponentMentality}</span></td>
+                <td><strong>{matchup.clubFormation}</strong><span>{matchup.clubMentality}</span></td>
+                <td>{matchup.clubPressing.toFixed(0)} press · {matchup.clubTempo.toFixed(0)} tempo</td>
+                <td>{matchup.matches}</td>
+                <td>{matchup.xgFor.toFixed(2)} / {matchup.xgAgainst.toFixed(2)}</td>
+                <td>{matchup.possession.toFixed(1)}%</td>
+                <td>{matchup.pressWins.toFixed(1)} / {matchup.opponentPressWins.toFixed(1)}</td>
+                <td>{matchup.boxEntries.toFixed(1)} / {matchup.opponentBoxEntries.toFixed(1)}</td>
+                <td>{matchup.counters.toFixed(1)}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

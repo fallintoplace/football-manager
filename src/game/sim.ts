@@ -4,11 +4,16 @@ import type {
   CareerState,
   Club,
   Fixture,
+  MatchAction,
+  MatchActionOutcome,
+  MatchActionQualifierValue,
+  MatchActionType,
   MatchEvent,
   MatchFrame,
   MatchPhase,
   MatchResult,
   Player,
+  PlayerMatchStats,
   PlayerIntent,
   PlayerPosition,
   Tactic,
@@ -59,12 +64,31 @@ type TeamLedger = {
 }
 
 type MatchLedger = Record<string, TeamLedger>
+type PlayerStatsLedger = Record<string, PlayerMatchStats>
 
 type PossessionOutcome = {
   nextControlId?: string
   events: MatchEvent[]
+  actions: MatchAction[]
   frames: MatchFrame[]
 }
+
+type ActionDraft = {
+  minute: number
+  secondOffset?: number
+  teamId: string
+  playerId: string
+  recipientPlayerId?: string
+  type: MatchActionType
+  outcome: MatchActionOutcome
+  startX: number
+  startY: number
+  endX?: number
+  endY?: number
+  qualifiers: Record<string, MatchActionQualifierValue>
+}
+
+type ActionFactory = (draft: ActionDraft) => MatchAction
 
 export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult {
   const home = getClub(state, fixture.homeId)
@@ -87,6 +111,7 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
   )
   const ledger = createLedger(homeProfile, awayProfile)
   const events: MatchEvent[] = []
+  const actions: MatchAction[] = []
   const trace: MatchFrame[] = [
     createTraceFrame({
       minute: 0,
@@ -100,6 +125,7 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
     }),
   ]
   const playerRatings = seedRatings(homeProfile, awayProfile)
+  const playerStats = seedPlayerStats(homeProfile, awayProfile)
   const possessionHome = calculatePossessionShare(homeProfile, awayProfile)
   const possessions = clamp(
     Math.round(50 + (homeTactic.tempo + awayTactic.tempo) * 0.08 + (homeTactic.pressing + awayTactic.pressing) * 0.035 + randomRange(random, -4, 5)),
@@ -120,6 +146,8 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
     const defending = homeControls ? awayProfile : homeProfile
 
     const outcome = simulatePossession({
+      matchId: fixture.id,
+      possessionIndex: index,
       minute,
       attacking,
       defending,
@@ -127,9 +155,11 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
       random,
       ledger,
       playerRatings,
+      playerStats,
     })
 
     events.push(...outcome.events)
+    actions.push(...outcome.actions)
     trace.push(...outcome.frames)
     nextControlId = outcome.nextControlId
   }
@@ -150,6 +180,7 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
     homeGoals: homeLedger.goals,
     awayGoals: awayLedger.goals,
     events: retainImportantEvents(events, 24),
+    actions,
     trace: retainTraceWindow(trace, 280),
     metrics: {
       homeXg: roundOne(homeLedger.xg),
@@ -162,7 +193,36 @@ export function simulateMatch(state: CareerState, fixture: Fixture): MatchResult
       homePressure: Math.round(homeProfile.press),
       awayPressure: Math.round(awayProfile.press),
       homeTerritory: territoryShare(homeLedger, awayLedger),
+      homePossessions: homeLedger.possessions,
+      awayPossessions: awayLedger.possessions,
+      homeFinalThirdEntries: homeLedger.finalThirdEntries,
+      awayFinalThirdEntries: awayLedger.finalThirdEntries,
+      homeBoxEntries: homeLedger.boxEntries,
+      awayBoxEntries: awayLedger.boxEntries,
+      homePressWins: homeLedger.pressWins,
+      awayPressWins: awayLedger.pressWins,
+      homeBuildUpFails: homeLedger.buildUpFails,
+      awayBuildUpFails: awayLedger.buildUpFails,
+      homeMidfieldWins: homeLedger.midfieldWins,
+      awayMidfieldWins: awayLedger.midfieldWins,
+      homeLineBreaks: homeLedger.lineBreaks,
+      awayLineBreaks: awayLedger.lineBreaks,
+      homeBallsBehind: homeLedger.ballsBehind,
+      awayBallsBehind: awayLedger.ballsBehind,
+      homeCounters: homeLedger.counters,
+      awayCounters: awayLedger.counters,
+      homeSaves: homeLedger.saves,
+      awaySaves: awayLedger.saves,
+      homeCards: homeLedger.cards,
+      awayCards: awayLedger.cards,
+      homeLateFatigueLosses: homeLedger.lateFatigueLosses,
+      awayLateFatigueLosses: awayLedger.lateFatigueLosses,
     },
+    tactics: {
+      home: homeTactic,
+      away: awayTactic,
+    },
+    playerStats,
     report: buildReport(homeProfile, awayProfile, ledger, possessionHome),
     playerRatings,
   }
@@ -182,6 +242,8 @@ function retainTraceWindow(trace: MatchFrame[], limit: number) {
 }
 
 function simulatePossession({
+  matchId,
+  possessionIndex,
   minute,
   attacking,
   defending,
@@ -189,7 +251,10 @@ function simulatePossession({
   random,
   ledger,
   playerRatings,
+  playerStats,
 }: {
+  matchId: string
+  possessionIndex: number
   minute: number
   attacking: TeamProfile
   defending: TeamProfile
@@ -197,9 +262,24 @@ function simulatePossession({
   random: () => number
   ledger: MatchLedger
   playerRatings: Record<string, number>
+  playerStats: PlayerStatsLedger
 }): PossessionOutcome {
   const events: MatchEvent[] = []
+  const actions: MatchAction[] = []
   const frames: MatchFrame[] = []
+  const possessionId = `${matchId}:possession:${possessionIndex}`
+  const sequenceId = `${possessionId}:sequence:1`
+  const addAction: ActionFactory = (draft) => {
+    const action = createMatchAction({
+      matchId,
+      sequenceId,
+      possessionId,
+      actionIndex: actions.length,
+      ...draft,
+    })
+    actions.push(action)
+    return action
+  }
   const attackLog = ledger[attacking.club.id]
   const defendLog = ledger[defending.club.id]
   attackLog.possessions += 1
@@ -231,9 +311,36 @@ function simulatePossession({
       random,
       (player) => player.workRate + player.stamina + player.decisions,
     )
+    const firstPass = pickWeighted(attacking.defenders, random, (player) => player.passing + player.firstTouch + player.decisions)
+    addAction({
+      minute,
+      teamId: attacking.club.id,
+      playerId: attacking.keeper.id,
+      recipientPlayerId: firstPass.id,
+      type: 'pass',
+      outcome: 'unsuccessful',
+      startX: 8,
+      startY: lane,
+      endX: 24,
+      endY: lane,
+      qualifiers: { phase: 'build', passType: 'short', progressive: false, pressured: true },
+    })
 
     if (buildup < -14) {
       defendLog.pressWins += 1
+      addAction({
+        minute,
+        secondOffset: 0.15,
+        teamId: defending.club.id,
+        playerId: presser.id,
+        type: 'interception',
+        outcome: 'successful',
+        startX: 28,
+        startY: lane,
+        endX: 34,
+        endY: lane,
+        qualifiers: { phase: 'build', highRecovery: true, pressure: roundOne(defending.press) },
+      })
       nudgeRating(playerRatings, presser.id, 0.12)
       frames.push(
         createTraceFrame({
@@ -258,7 +365,7 @@ function simulatePossession({
           playerName: presser.name,
           text: `${presser.name} wins it high and turns ${defending.club.shortName} toward goal.`,
         })
-        events.push(resolveShot(minute, defending, attacking, random, ledger, playerRatings, 'counter'))
+        events.push(resolveShot(minute, defending, attacking, random, ledger, playerRatings, playerStats, addAction, 'counter'))
         frames.push(
           createTraceFrame({
             minute: minute + 0.35,
@@ -271,7 +378,7 @@ function simulatePossession({
             note: `${defending.club.shortName} counter into a shot`,
           }),
         )
-        return { events, frames, nextControlId: attacking.club.id }
+        return { events, actions, frames, nextControlId: attacking.club.id }
       }
     }
 
@@ -284,8 +391,38 @@ function simulatePossession({
         text: `${defending.club.shortName}'s press traps the buildup before it reaches midfield.`,
       })
     }
-    return { events, frames, nextControlId: defending.club.id }
+    return { events, actions, frames, nextControlId: defending.club.id }
   }
+
+  const firstPass = pickWeighted(attacking.defenders, random, (player) => player.passing + player.firstTouch + player.decisions)
+  const firstReceiver = pickWeighted(attacking.midfielders, random, (player) => player.firstTouch + player.vision + player.decisions)
+  addAction({
+    minute,
+    teamId: attacking.club.id,
+    playerId: attacking.keeper.id,
+    recipientPlayerId: firstPass.id,
+    type: 'pass',
+    outcome: 'successful',
+    startX: 8,
+    startY: lane,
+    endX: 24,
+    endY: lane,
+    qualifiers: { phase: 'build', passType: 'short', progressive: false, pressured: buildup < 4 },
+  })
+  addAction({
+    minute,
+    secondOffset: 0.14,
+    teamId: attacking.club.id,
+    playerId: firstPass.id,
+    recipientPlayerId: firstReceiver.id,
+    type: 'pass',
+    outcome: 'successful',
+    startX: 25,
+    startY: lane,
+    endX: 42,
+    endY: lane + randomRange(random, -8, 8),
+    qualifiers: { phase: 'build', passType: 'progressive', progressive: true, pressured: buildup < 4 },
+  })
 
   momentum += buildup > 10 ? 4 : 1
   attackLog.territory += 1
@@ -307,6 +444,27 @@ function simulatePossession({
     defending.midfieldControl * 0.72 + defending.press * 0.24 + defensiveBlock(defending.tactic),
     random,
   )
+  const midfieldCarrier = pickWeighted(attacking.midfielders, random, (player) => player.passing + player.vision + player.decisions)
+  const midfieldTarget = pickWeighted([...attacking.midfielders, ...attacking.forwards], random, (player) => player.firstTouch + player.dribbling + player.vision)
+  addAction({
+    minute,
+    secondOffset: 0.28,
+    teamId: attacking.club.id,
+    playerId: midfieldCarrier.id,
+    recipientPlayerId: midfieldTarget.id,
+    type: 'pass',
+    outcome: midfieldDuel < -5 ? 'unsuccessful' : 'successful',
+    startX: 43,
+    startY: lane,
+    endX: midfieldDuel < -5 ? 48 : 58,
+    endY: lane + randomRange(random, -10, 10),
+    qualifiers: {
+      phase: 'midfield',
+      passType: midfieldDuel > 8 ? 'progressive' : 'circulation',
+      progressive: midfieldDuel > 8,
+      pressured: midfieldDuel < 4,
+    },
+  })
 
   if (midfieldDuel < -5) {
     defendLog.midfieldWins += 1
@@ -315,6 +473,19 @@ function simulatePossession({
       random,
       (player) => player.tackling + player.stamina + player.decisions,
     )
+    addAction({
+      minute,
+      secondOffset: 0.38,
+      teamId: defending.club.id,
+      playerId: winner.id,
+      type: 'duel',
+      outcome: 'successful',
+      startX: 48,
+      startY: lane,
+      endX: 52,
+      endY: lane,
+      qualifiers: { phase: 'midfield', duelType: 'ground', secondBall: true },
+    })
     nudgeRating(playerRatings, winner.id, 0.1)
     if (minute > 70 && attacking.fatigueRisk > 30) {
       attackLog.lateFatigueLosses += 1
@@ -341,12 +512,26 @@ function simulatePossession({
         note: `${winner.name} wins the midfield duel`,
       }),
     )
-    return { events, frames, nextControlId: defending.club.id }
+    return { events, actions, frames, nextControlId: defending.club.id }
   }
 
   attackLog.finalThirdEntries += 1
   attackLog.territory += 2
   momentum += midfieldDuel > 11 ? 5 : 2
+  const progressionPlayer = pickWeighted([...attacking.midfielders, ...attacking.forwards], random, (player) => player.dribbling + player.pace + player.firstTouch)
+  addAction({
+    minute,
+    secondOffset: 0.42,
+    teamId: attacking.club.id,
+    playerId: progressionPlayer.id,
+    type: 'carry',
+    outcome: 'successful',
+    startX: 56,
+    startY: lane,
+    endX: 66,
+    endY: lane + randomRange(random, -12, 12),
+    qualifiers: { phase: 'final-third', progressive: true, carryIntoFinalThird: true },
+  })
   frames.push(
     createTraceFrame({
       minute: minute + 0.4,
@@ -375,7 +560,21 @@ function simulatePossession({
       playerName: passer.name,
       text: `${passer.name} slides a pass behind the high line for ${runner.name}.`,
     })
-    events.push(resolveShot(minute, attacking, defending, random, ledger, playerRatings, 'behind-line', runner))
+    addAction({
+      minute,
+      secondOffset: 0.5,
+      teamId: attacking.club.id,
+      playerId: passer.id,
+      recipientPlayerId: runner.id,
+      type: 'pass',
+      outcome: 'successful',
+      startX: 64,
+      startY: lane,
+      endX: 88,
+      endY: lane + randomRange(random, -10, 10),
+      qualifiers: { phase: 'final-third', passType: 'through-ball', progressive: true, behindLine: true },
+    })
+    events.push(resolveShot(minute, attacking, defending, random, ledger, playerRatings, playerStats, addAction, 'behind-line', runner))
     frames.push(
       createTraceFrame({
         minute: minute + 0.58,
@@ -389,7 +588,7 @@ function simulatePossession({
         note: `${runner.name} runs beyond the line`,
       }),
     )
-    return { events, frames, nextControlId: defending.club.id }
+    return { events, actions, frames, nextControlId: defending.club.id }
   }
 
   const finalThirdDuel = battle(
@@ -425,7 +624,20 @@ function simulatePossession({
         note: `${defender.name} steps out`,
       }),
     )
-    return { events, frames, nextControlId: defending.club.id }
+    addAction({
+      minute,
+      secondOffset: 0.56,
+      teamId: defending.club.id,
+      playerId: defender.id,
+      type: 'tackle',
+      outcome: 'successful',
+      startX: 68,
+      startY: lane,
+      endX: 70,
+      endY: lane,
+      qualifiers: { phase: 'final-third', tackleType: 'standing', stoppedEntry: true },
+    })
+    return { events, actions, frames, nextControlId: defending.club.id }
   }
 
   if (finalThirdDuel < 17 + leadDrag * 4 + entryVolumeDrag) {
@@ -443,6 +655,19 @@ function simulatePossession({
         text: `${carrier.name} carries ${attacking.club.shortName} into the final third, but the move stalls.`,
       })
     }
+    addAction({
+      minute,
+      secondOffset: 0.56,
+      teamId: attacking.club.id,
+      playerId: progressionPlayer.id,
+      type: 'carry',
+      outcome: 'unsuccessful',
+      startX: 66,
+      startY: lane,
+      endX: 70,
+      endY: lane + randomRange(random, -8, 8),
+      qualifiers: { phase: 'final-third', progressive: false, underPressure: true },
+    })
     frames.push(
       createTraceFrame({
         minute: minute + 0.56,
@@ -455,7 +680,7 @@ function simulatePossession({
         note: `${attacking.club.shortName} recycle at the edge of pressure`,
       }),
     )
-    return { events, frames, nextControlId: random() < 0.58 ? defending.club.id : attacking.club.id }
+    return { events, actions, frames, nextControlId: random() < 0.58 ? defending.club.id : attacking.club.id }
   }
 
   attackLog.boxEntries += 1
@@ -479,10 +704,39 @@ function simulatePossession({
     defending.boxDefense + defending.keeperSkill * 0.16 + compactness(defending.tactic),
     random,
   )
-
   const shotVolumeDrag = Math.max(0, attackLog.shots - 12) * 2
+  const boxCreator = pickWeighted(attacking.midfielders, random, (player) => player.passing + player.vision + player.crossing)
+  const boxTarget = pickWeighted(attacking.forwards, random, (player) => player.firstTouch + player.finishing + player.positioning)
+  addAction({
+    minute,
+    secondOffset: 0.66,
+    teamId: attacking.club.id,
+    playerId: boxCreator.id,
+    recipientPlayerId: boxTarget.id,
+    type: 'pass',
+    outcome: boxDuel < 19 + leadDrag * 5 + shotVolumeDrag ? 'unsuccessful' : 'successful',
+    startX: 68,
+    startY: lane,
+    endX: 80,
+    endY: lane + randomRange(random, -12, 12),
+    qualifiers: { phase: 'box', passType: lane > 62 || lane < 38 ? 'cross' : 'cutback', progressive: true, pressured: boxDuel < 30 },
+  })
+
   if (boxDuel < 19 + leadDrag * 5 + shotVolumeDrag) {
     const defender = pickWeighted(defending.defenders, random, (player) => player.tackling + player.heading + player.strength)
+    addAction({
+      minute,
+      secondOffset: 0.74,
+      teamId: defending.club.id,
+      playerId: defender.id,
+      type: 'block',
+      outcome: 'successful',
+      startX: 82,
+      startY: lane,
+      endX: 83,
+      endY: lane,
+      qualifiers: { phase: 'box', blockType: 'cutback', shotPrevented: true },
+    })
     nudgeRating(playerRatings, defender.id, 0.14)
     if (random() < 0.22) {
       events.push({
@@ -507,10 +761,10 @@ function simulatePossession({
         note: `${defender.name} blocks the final action`,
       }),
     )
-    return { events, frames, nextControlId: defending.club.id }
+    return { events, actions, frames, nextControlId: defending.club.id }
   }
 
-  events.push(resolveShot(minute, attacking, defending, random, ledger, playerRatings, boxDuel > 34 + leadDrag * 5 ? 'clear' : 'box'))
+  events.push(resolveShot(minute, attacking, defending, random, ledger, playerRatings, playerStats, addAction, boxDuel > 34 + leadDrag * 5 ? 'clear' : 'box'))
   frames.push(
     createTraceFrame({
       minute: minute + 0.82,
@@ -523,7 +777,7 @@ function simulatePossession({
       note: `${attacking.club.shortName} get the shot away`,
     }),
   )
-  return { events, frames, nextControlId: defending.club.id }
+  return { events, actions, frames, nextControlId: defending.club.id }
 }
 
 function resolveShot(
@@ -533,6 +787,8 @@ function resolveShot(
   random: () => number,
   ledger: MatchLedger,
   playerRatings: Record<string, number>,
+  playerStats: PlayerStatsLedger,
+  addAction: ActionFactory,
   chanceType: 'box' | 'clear' | 'counter' | 'behind-line',
   forcedShooter?: Player,
 ): MatchEvent {
@@ -565,9 +821,37 @@ function resolveShot(
 
   attackingLog.shots += 1
   attackingLog.xg += xg
+  const shooterStats = playerStats[shooter.id]
+  if (shooterStats) {
+    shooterStats.shots += 1
+    shooterStats.xg = roundThree(shooterStats.xg + xg)
+    if (goal) shooterStats.goals += 1
+  }
   if (onTarget) attackingLog.shotsOnTarget += 1
   if (goal) attackingLog.goals += 1
   if (onTarget && !goal) defendingLog.saves += 1
+
+  addAction({
+    minute,
+    secondOffset: 0.82,
+    teamId: attacking.club.id,
+    playerId: shooter.id,
+    type: 'shot',
+    outcome: goal ? 'successful' : onTarget ? 'unsuccessful' : 'unsuccessful',
+    startX: chanceType === 'counter' ? 76 : chanceType === 'behind-line' ? 86 : chanceType === 'clear' ? 84 : 79,
+    startY: 50 + randomRange(random, -16, 16),
+    endX: 96,
+    endY: 50 + randomRange(random, -12, 12),
+    qualifiers: {
+      phase: 'shot',
+      xg: roundThree(xg),
+      bodyPart: random() < 0.16 ? 'head' : 'foot',
+      shotContext: chanceType,
+      bigChance: xg >= 0.16,
+      onTarget,
+      keeperPressure: roundOne(defending.keeperSkill),
+    },
+  })
 
   nudgeRating(playerRatings, shooter.id, goal ? 0.95 : onTarget ? 0.18 : 0.04)
   nudgeRating(playerRatings, creator.id, goal ? 0.34 : 0.08)
@@ -581,6 +865,50 @@ function resolveShot(
     playerName: shooter.name,
     xg,
     text: shotText({ goal, onTarget, xg, chanceType, shooter, creator, defending }),
+  }
+}
+
+function createMatchAction({
+  matchId,
+  sequenceId,
+  possessionId,
+  actionIndex,
+  minute,
+  secondOffset = 0,
+  teamId,
+  playerId,
+  recipientPlayerId,
+  type,
+  outcome,
+  startX,
+  startY,
+  endX,
+  endY,
+  qualifiers,
+}: ActionDraft & {
+  matchId: string
+  sequenceId: string
+  possessionId: string
+  actionIndex: number
+}): MatchAction {
+  const second = clamp(Math.round(minute * 60 + secondOffset), 0, 90 * 60)
+  return {
+    id: `${matchId}:action:${possessionId}:${actionIndex}`,
+    matchId,
+    sequenceId,
+    possessionId,
+    period: second < 45 * 60 ? 1 : 2,
+    second,
+    teamId,
+    playerId,
+    ...(recipientPlayerId ? { recipientPlayerId } : {}),
+    type,
+    outcome,
+    startX: roundOne(startX),
+    startY: roundOne(startY),
+    ...(endX === undefined ? {} : { endX: roundOne(endX) }),
+    ...(endY === undefined ? {} : { endY: roundOne(endY) }),
+    qualifiers,
   }
 }
 
@@ -775,6 +1103,20 @@ function seedRatings(home: TeamProfile, away: TeamProfile) {
     ratings[player.id] = baseRating(player)
   }
   return ratings
+}
+
+function seedPlayerStats(home: TeamProfile, away: TeamProfile): PlayerStatsLedger {
+  const stats: PlayerStatsLedger = {}
+  for (const player of [...home.lineup, ...away.lineup]) {
+    stats[player.id] = {
+      started: true,
+      minutesPlayed: 90,
+      goals: 0,
+      shots: 0,
+      xg: 0,
+    }
+  }
+  return stats
 }
 
 function baseRating(player: Player) {
@@ -1209,4 +1551,8 @@ function getClub(state: CareerState, clubId: string) {
 
 function roundOne(value: number) {
   return Math.round(value * 10) / 10
+}
+
+function roundThree(value: number) {
+  return Math.round(value * 1000) / 1000
 }

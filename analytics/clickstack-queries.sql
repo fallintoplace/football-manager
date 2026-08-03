@@ -190,3 +190,123 @@ WHERE run_id = 'replace-with-run-id'
   AND club_id = 'replace-with-club-id'
 GROUP BY run_id, season, round, club_id
 ORDER BY round;
+
+SELECT
+    run_id,
+    career_id,
+    season,
+    last_round,
+    rounds_completed,
+    matches_in_round,
+    clubs_expected,
+    status,
+    schema_version,
+    updated_at
+FROM touchline_runs_v2
+WHERE run_id = 'replace-with-run-id'
+ORDER BY updated_at DESC;
+
+SELECT
+    run_id,
+    season,
+    round,
+    club_id,
+    opponent_id,
+    if(is_home, 'home', 'away') AS venue,
+    formation,
+    mentality,
+    pressing,
+    tempo,
+    defensive_line,
+    possessions,
+    final_third_entries,
+    box_entries,
+    press_wins,
+    build_up_fails,
+    midfield_wins,
+    line_breaks,
+    balls_behind,
+    counters,
+    late_fatigue_losses,
+    round(xg_for, 2) AS xg_for
+FROM touchline_match_club_facts_v2
+WHERE run_id = 'replace-with-run-id'
+  AND club_id = 'replace-with-club-id'
+ORDER BY round, match_id;
+
+SELECT
+    run_id,
+    season,
+    round,
+    player_id,
+    player_name,
+    position,
+    opponent_id,
+    started,
+    minutes_played,
+    round(rating, 2) AS rating,
+    goals,
+    shots,
+    round(xg, 3) AS xg,
+    round(xg / greatest(minutes_played, 1) * 90, 3) AS xg_per_90
+FROM touchline_player_match_facts_v2
+WHERE run_id = 'replace-with-run-id'
+  AND club_id = 'replace-with-club-id'
+ORDER BY round, rating DESC;
+
+SELECT
+    cf.opponent_id,
+    cf.formation AS club_formation,
+    cf.mentality AS club_mentality,
+    round(avg(cf.pressing), 1) AS club_pressing,
+    opp.formation AS opponent_formation,
+    opp.mentality AS opponent_mentality,
+    count() AS matches,
+    round(avg(cf.xg_for), 2) AS xg_for,
+    round(avg(opp.xg_for), 2) AS xg_against,
+    round(avg(cf.possession), 1) AS possession,
+    round(avg(cf.press_wins), 1) AS press_wins,
+    round(avg(opp.press_wins), 1) AS opponent_press_wins,
+    round(avg(cf.box_entries), 1) AS box_entries,
+    round(avg(opp.box_entries), 1) AS opponent_box_entries,
+    round(avg(cf.counters), 1) AS counters,
+    round(avg(cf.build_up_fails), 1) AS build_up_fails,
+    round(avg(opp.build_up_fails), 1) AS opponent_build_up_fails
+FROM touchline_match_club_facts_v2 AS cf
+INNER JOIN touchline_match_club_facts_v2 AS opp
+    ON opp.run_id = cf.run_id
+   AND opp.match_id = cf.match_id
+   AND opp.club_id = cf.opponent_id
+WHERE cf.run_id = 'replace-with-run-id'
+  AND cf.club_id = 'replace-with-club-id'
+  AND ('replace-with-opponent-id' = '' OR cf.opponent_id = 'replace-with-opponent-id')
+GROUP BY cf.opponent_id, cf.formation, cf.mentality, opp.formation, opp.mentality
+ORDER BY matches DESC, xg_for DESC;
+
+SELECT
+    action_type,
+    outcome,
+    count() AS actions,
+    uniqExact(possession_id) AS possessions,
+    countIf(action_type = 'pass' AND outcome = 'successful') AS completed_passes,
+    round(avgIf(end_x - start_x, end_x > start_x), 1) AS average_forward_distance
+FROM touchline_match_actions_v2
+WHERE run_id = 'replace-with-run-id'
+  AND team_id = 'replace-with-club-id'
+GROUP BY action_type, outcome
+ORDER BY actions DESC;
+
+SELECT
+    player_id AS passer_id,
+    recipient_player_id AS receiver_id,
+    count() AS attempts,
+    countIf(outcome = 'successful') AS completions,
+    round(completions / greatest(attempts, 1) * 100, 1) AS completion_rate
+FROM touchline_match_actions_v2
+WHERE run_id = 'replace-with-run-id'
+  AND team_id = 'replace-with-club-id'
+  AND action_type = 'pass'
+  AND recipient_player_id != ''
+GROUP BY passer_id, receiver_id
+ORDER BY completions DESC, attempts DESC
+LIMIT 40;
