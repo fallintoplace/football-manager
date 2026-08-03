@@ -19,6 +19,7 @@ import {
   Save,
   Settings2,
   Shield,
+  Target,
   Trophy,
   UserCheck,
   Users,
@@ -43,10 +44,18 @@ import {
   updateTactic,
   updateTraining,
 } from './game/career'
-import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, ingestMatchday, seasonRunId } from './game/analytics'
+import { buildAnalyticsPayload, clickhouseUiUrl, fetchAnalyticsSummary, fetchAnalyticsTimeline, ingestMatchday, seasonRunId } from './game/analytics'
 import { createAiTactic, createInitialCareer } from './game/data'
 import { playerAttributeSummary, playerOverall, playerScore, validateLineup } from './game/lineup'
-import type { AnalyticsPlayer, AnalyticsSummary, AnalyticsSyncStatus } from './game/analytics'
+import type {
+  AnalyticsDevelopmentPlayer,
+  AnalyticsPlayer,
+  AnalyticsSummary,
+  AnalyticsSyncStatus,
+  AnalyticsTimeline,
+  AnalyticsTimelinePoint,
+  AnalyticsTimelineStanding,
+} from './game/analytics'
 import type {
   CareerState,
   Club,
@@ -252,11 +261,17 @@ function App() {
       {activeTab === 'analytics' && (
         <AnalyticsView
           clubId={selectedClub.id}
+          selectedClub={selectedClub}
+          clubs={state.clubs}
           runId={seasonRunId(state)}
           status={analyticsStatus}
           seasonSyncProgress={seasonSyncProgress}
           localResults={state.results}
           onStatusChange={setAnalyticsStatus}
+          onOpenMatch={(matchId) => {
+            setState((current) => ({ ...current, lastMatchId: matchId }))
+            setActiveTab('match')
+          }}
         />
       )}
     </main>
@@ -1015,36 +1030,58 @@ function LeagueView({ state, standings }: { state: CareerState; standings: Retur
 
 function AnalyticsView({
   clubId,
+  selectedClub,
+  clubs,
   runId,
   status,
   seasonSyncProgress,
   localResults,
   onStatusChange,
+  onOpenMatch,
 }: {
   clubId: string
+  selectedClub: Club
+  clubs: Club[]
   runId: string
   status: AnalyticsSyncStatus
   seasonSyncProgress?: SeasonSyncProgress
   localResults: MatchResult[]
   onStatusChange: (status: AnalyticsSyncStatus) => void
+  onOpenMatch: (matchId: string) => void
 }) {
   const [summary, setSummary] = useState<AnalyticsSummary>()
+  const [timeline, setTimeline] = useState<AnalyticsTimeline>()
   const [loadedKey, setLoadedKey] = useState('')
   const [error, setError] = useState(false)
   const requestKey = `${clubId}:${runId}:${localResults.length}`
   const loading = loadedKey !== requestKey && !summary
+  const points = timeline?.points ?? []
+  const [selectedRoundIndex, setSelectedRoundIndex] = useState(0)
+  const currentIndex = points.length ? Math.min(selectedRoundIndex, points.length - 1) : 0
+  const selectedPoint = points[currentIndex]
+  const clubsById = useMemo(() => new Map(clubs.map((club) => [club.id, club])), [clubs])
+  const selectedTable = useMemo(
+    () => (selectedPoint ? (timeline?.table ?? []).filter((standing) => standing.round === selectedPoint.round).sort((left, right) => left.rank - right.rank) : []),
+    [selectedPoint, timeline?.table],
+  )
+  const selectedMatches = useMemo(
+    () => (selectedPoint ? localResults.filter((result) => result.round === selectedPoint.round && (result.homeId === clubId || result.awayId === clubId)) : []),
+    [clubId, localResults, selectedPoint],
+  )
 
   useEffect(() => {
     let active = true
     if (status === 'syncing') return () => {
       active = false
     }
-    void fetchAnalyticsSummary(clubId, runId)
-      .then((nextSummary) => {
+    void Promise.all([fetchAnalyticsSummary(clubId, runId), fetchAnalyticsTimeline(clubId, runId)])
+      .then(([nextSummary, nextTimeline]) => {
         if (!active) return
         setSummary(nextSummary)
+        setTimeline(nextTimeline)
         setError(false)
         setLoadedKey(requestKey)
+        setSelectedRoundIndex(Math.max(0, nextTimeline.points.length - 1))
         onStatusChange('online')
       })
       .catch(() => {
@@ -1105,14 +1142,122 @@ function AnalyticsView({
         </section>
       )}
 
-      {!loading && !error && summary && (
+      {!loading && !error && summary && timeline && (
         <>
+          <section className="panel analytics-hero">
+            <div className="analytics-hero-club">
+              <ClubBadge club={selectedClub} size="lg" />
+              <div>
+                <p className="eyebrow">Season Command Center</p>
+                <h2>{selectedClub.name} performance arc</h2>
+                <p className="analytics-hero-copy">A round-by-round view built from ClickHouse match facts, standings snapshots, and player development.</p>
+              </div>
+            </div>
+            {selectedPoint ? (
+              <div className="analytics-hero-score">
+                <span>Round {selectedPoint.round + 1}</span>
+                <strong>#{selectedPoint.rank}</strong>
+                <small>{selectedPoint.points} points</small>
+              </div>
+            ) : (
+              <div className="analytics-hero-score muted-score">
+                <span>Preseason</span>
+                <strong>—</strong>
+                <small>Awaiting match facts</small>
+              </div>
+            )}
+          </section>
+
           <section className="analytics-grid">
             <Metric icon={<CircleDot size={17} />} label="Matches" value={summary.matches} />
             <Metric icon={<ClipboardList size={17} />} label="Events" value={summary.events} />
             <Metric icon={<Activity size={17} />} label="Replay frames" value={summary.frames} />
             <Metric icon={<BarChart3 size={17} />} label="Avg xG" value={summary.averageXg.toFixed(2)} />
           </section>
+
+          {points.length > 0 && selectedPoint && (
+            <>
+              <section className="panel wide-panel analytics-story-panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Season story</p>
+                    <h2>How the campaign moved</h2>
+                  </div>
+                  <div className="analytics-round-label">
+                    <span>Round</span>
+                    <strong>{selectedPoint.round + 1}</strong>
+                    <span>of {points.length}</span>
+                  </div>
+                </div>
+                <input
+                  className="analytics-round-slider"
+                  type="range"
+                  min="0"
+                  max={Math.max(0, points.length - 1)}
+                  value={currentIndex}
+                  onChange={(event) => setSelectedRoundIndex(Number(event.target.value))}
+                  aria-label="Select season round"
+                />
+                <div className="analytics-chart-grid">
+                  <TimelineChart
+                    points={points}
+                    selectedIndex={currentIndex}
+                    title="Points collected"
+                    series={[{ key: 'points', label: 'Points', color: 'var(--club-primary)' }]}
+                  />
+                  <TimelineChart
+                    points={points}
+                    selectedIndex={currentIndex}
+                    title="Expected goals"
+                    series={[
+                      { key: 'xgFor', label: 'For', color: 'var(--club-primary)' },
+                      { key: 'xgAgainst', label: 'Against', color: 'var(--negative)' },
+                    ]}
+                  />
+                </div>
+                <div className="analytics-round-summary">
+                  <Metric icon={<Trophy size={16} />} label="Position" value={`#${selectedPoint.rank}`} />
+                  <Metric icon={<BarChart3 size={16} />} label="Points" value={selectedPoint.points} />
+                  <Metric icon={<Target size={16} />} label="xG" value={`${selectedPoint.xgFor.toFixed(2)} / ${selectedPoint.xgAgainst.toFixed(2)}`} />
+                  <Metric icon={<Gauge size={16} />} label="Possession" value={`${selectedPoint.possession.toFixed(1)}%`} />
+                </div>
+              </section>
+
+              <section className="panel wide-panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">League table</p>
+                    <h2>Round {selectedPoint.round + 1} snapshot</h2>
+                  </div>
+                  <Trophy size={20} />
+                </div>
+                <LeagueSnapshotTable standings={selectedTable} clubsById={clubsById} selectedClubId={clubId} />
+              </section>
+
+              <section className="analytics-lower-grid">
+                <section className="panel">
+                  <div className="section-heading compact">
+                    <div>
+                      <p className="eyebrow">Matchday {selectedPoint.round + 1}</p>
+                      <h2>Selected club fixtures</h2>
+                    </div>
+                    <CircleDot size={20} />
+                  </div>
+                  <MatchdayCards matches={selectedMatches} clubsById={clubsById} onOpenMatch={onOpenMatch} />
+                </section>
+                <section className="panel">
+                  <div className="section-heading compact">
+                    <div>
+                      <p className="eyebrow">Player development</p>
+                      <h2>Who moved the needle?</h2>
+                    </div>
+                    <Users size={20} />
+                  </div>
+                  <DevelopmentCards players={timeline.players} />
+                </section>
+              </section>
+            </>
+          )}
 
           <section className="panel wide-panel">
             <div className="section-heading compact">
@@ -1142,6 +1287,167 @@ function AnalyticsView({
         </>
       )}
     </section>
+  )
+}
+
+type TimelineSeries = {
+  key: keyof AnalyticsTimelinePoint
+  label: string
+  color: string
+}
+
+function TimelineChart({
+  points,
+  selectedIndex,
+  title,
+  series,
+  invertPosition = false,
+}: {
+  points: AnalyticsTimelinePoint[]
+  selectedIndex: number
+  title: string
+  series: TimelineSeries[]
+  invertPosition?: boolean
+}) {
+  const width = 760
+  const height = 220
+  const padding = { top: 18, right: 18, bottom: 28, left: 38 }
+  const plotWidth = width - padding.left - padding.right
+  const plotHeight = height - padding.top - padding.bottom
+  const values = series.flatMap(({ key }) => points.map((point) => Number(point[key])))
+  const min = Math.min(...values, 0)
+  const max = Math.max(...values, 1)
+  const range = max - min || 1
+  const x = (index: number) => padding.left + (points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth)
+  const y = (value: number) => {
+    const normalized = (value - min) / range
+    return invertPosition ? padding.top + normalized * plotHeight : padding.top + (1 - normalized) * plotHeight
+  }
+
+  return (
+    <div className="analytics-chart">
+      <div className="analytics-chart-heading">
+        <strong>{title}</strong>
+        <div className="analytics-chart-legend">
+          {series.map((item) => (
+            <span key={item.label}><i style={{ background: item.color }} />{item.label}</span>
+          ))}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+        {[0, 0.5, 1].map((tick) => {
+          const tickValue = max - range * tick
+          return (
+            <g key={tick}>
+              <line x1={padding.left} x2={width - padding.right} y1={padding.top + plotHeight * tick} y2={padding.top + plotHeight * tick} className="chart-gridline" />
+              <text x={padding.left - 8} y={padding.top + plotHeight * tick + 4} textAnchor="end" className="chart-label">{tickValue.toFixed(title === 'Expected goals' ? 1 : 0)}</text>
+            </g>
+          )
+        })}
+        {series.map((item) => {
+          const path = points.map((point, index) => `${index ? 'L' : 'M'} ${x(index)} ${y(Number(point[item.key]))}`).join(' ')
+          return <path d={path} fill="none" stroke={item.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" key={item.label} />
+        })}
+        {points.map((point, index) => (
+          <g key={point.round}>
+            <line x1={x(index)} x2={x(index)} y1={padding.top} y2={height - padding.bottom} className={index === selectedIndex ? 'chart-focus-line active' : 'chart-focus-line'} />
+            {series.map((item) => (
+              <circle cx={x(index)} cy={y(Number(point[item.key]))} r={index === selectedIndex ? 5 : 3} fill={item.color} stroke="var(--surface)" strokeWidth="2" key={`${point.round}-${item.label}`}>
+                <title>{`Round ${point.round + 1}: ${item.label} ${Number(point[item.key]).toFixed(2)}`}</title>
+              </circle>
+            ))}
+            {(index === 0 || index === points.length - 1 || index === selectedIndex) && <text x={x(index)} y={height - 8} textAnchor="middle" className="chart-label">R{point.round + 1}</text>}
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
+function LeagueSnapshotTable({
+  standings,
+  clubsById,
+  selectedClubId,
+}: {
+  standings: AnalyticsTimelineStanding[]
+  clubsById: Map<string, Club>
+  selectedClubId: string
+}) {
+  if (!standings.length) return <p className="empty-state">No standings snapshot has landed for this round.</p>
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table analytics-table">
+        <thead>
+          <tr><th>#</th><th>Club</th><th>Pl</th><th>W-D-L</th><th>GD</th><th>Pts</th><th>Form</th></tr>
+        </thead>
+        <tbody>
+          {standings.map((standing) => {
+            const club = clubsById.get(standing.clubId)
+            return (
+              <tr className={standing.clubId === selectedClubId ? 'selected-row' : ''} key={standing.clubId}>
+                <td><strong>{standing.rank}</strong></td>
+                <td><span className="fixture-club">{club && <ClubBadge club={club} size="sm" />}<strong>{club?.name ?? standing.clubId}</strong></span></td>
+                <td>{standing.played}</td>
+                <td>{standing.won}-{standing.drawn}-{standing.lost}</td>
+                <td className={standing.goalDifference >= 0 ? 'positive-text' : 'negative-text'}>{standing.goalDifference > 0 ? '+' : ''}{standing.goalDifference}</td>
+                <td><strong>{standing.points}</strong></td>
+                <td><span className="form-inline">{standing.form || '—'}</span></td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function MatchdayCards({
+  matches,
+  clubsById,
+  onOpenMatch,
+}: {
+  matches: MatchResult[]
+  clubsById: Map<string, Club>
+  onOpenMatch: (matchId: string) => void
+}) {
+  if (!matches.length) return <p className="empty-state">No local match report is available for this round.</p>
+
+  return (
+    <div className="analytics-match-list">
+      {matches.map((match) => {
+        const home = clubsById.get(match.homeId)
+        const away = clubsById.get(match.awayId)
+        return (
+          <button className="analytics-match-card" type="button" onClick={() => onOpenMatch(match.fixtureId)} key={match.fixtureId}>
+            <span className="analytics-match-meta">Round {match.round + 1} <b>{match.metrics.homeXg.toFixed(2)} xG · {match.events.length} events</b></span>
+            <span className="analytics-match-teams"><span>{home?.shortName ?? match.homeId}</span><strong>{match.homeGoals} - {match.awayGoals}</strong><span>{away?.shortName ?? match.awayId}</span></span>
+            <span className="analytics-match-action">Open replay →</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function DevelopmentCards({ players }: { players: AnalyticsDevelopmentPlayer[] }) {
+  if (!players.length) return <p className="empty-state">Player snapshots will appear after the first matchday.</p>
+
+  return (
+    <div className="development-card-list">
+      {players.slice(0, 6).map((player) => (
+        <div className="development-card" key={player.playerId}>
+          <div>
+            <strong>{player.playerName}</strong>
+            <span>{player.position} · {player.form} form · {player.fitness} fitness</span>
+          </div>
+          <div className="development-rating">
+            <strong>{player.overall}</strong>
+            <span className={player.change >= 0 ? 'positive-text' : 'negative-text'}>{player.change > 0 ? '+' : ''}{player.change}</span>
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 

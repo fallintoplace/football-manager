@@ -68,6 +68,63 @@ export type AnalyticsSummary = {
   source: string
 }
 
+export type AnalyticsTimelinePoint = {
+  round: number
+  rank: number
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  goalsFor: number
+  goalsAgainst: number
+  goalDifference: number
+  points: number
+  form: string
+  xgFor: number
+  xgAgainst: number
+  possession: number
+  shotsFor: number
+  shotsAgainst: number
+  pressure: number
+  territory: number
+  events: number
+  frames: number
+}
+
+export type AnalyticsTimelineStanding = {
+  round: number
+  clubId: string
+  rank: number
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  goalsFor: number
+  goalsAgainst: number
+  goalDifference: number
+  points: number
+  form: string
+}
+
+export type AnalyticsDevelopmentPlayer = {
+  playerId: string
+  playerName: string
+  position: PlayerPosition
+  openingOverall: number
+  overall: number
+  potential: number
+  form: number
+  fitness: number
+  change: number
+}
+
+export type AnalyticsTimeline = {
+  points: AnalyticsTimelinePoint[]
+  table: AnalyticsTimelineStanding[]
+  players: AnalyticsDevelopmentPlayer[]
+  source: string
+}
+
 export type AnalyticsSyncStatus = 'unknown' | 'syncing' | 'online' | 'offline'
 
 const analyticsBaseUrl = import.meta.env.VITE_ANALYTICS_URL ?? 'http://localhost:8787'
@@ -148,6 +205,13 @@ export async function fetchAnalyticsSummary(clubId: string, runId?: string): Pro
   const response = await fetch(`${analyticsBaseUrl}/api/analytics/summary?${query.toString()}`)
   if (!response.ok) throw new Error(`Analytics summary failed with ${response.status}`)
   return (await response.json()) as AnalyticsSummary
+}
+
+export async function fetchAnalyticsTimeline(clubId: string, runId: string): Promise<AnalyticsTimeline> {
+  const query = new URLSearchParams({ club_id: clubId, run_id: runId })
+  const response = await fetch(`${analyticsBaseUrl}/api/analytics/timeline?${query.toString()}`)
+  if (!response.ok) throw new Error(`Analytics timeline failed with ${response.status}`)
+  return (await response.json()) as AnalyticsTimeline
 }
 
 function average(values: number[]) {

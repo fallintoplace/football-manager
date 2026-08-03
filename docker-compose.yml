@@ -51,7 +51,7 @@ services:
       - clickhouse
     environment:
       ANALYTICS_ADDR: ":8787"
-      ANALYTICS_ALLOWED_ORIGIN: http://localhost:5173
+      ANALYTICS_ALLOWED_ORIGIN: http://localhost:5173,http://127.0.0.1:5173
       CLICKHOUSE_ADDR: clickhouse:9000
       CLICKHOUSE_PASSWORD: clickhouse
       ICEBERG_REST_URL: http://rest:8181

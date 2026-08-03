@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestValidatePayloadAcceptsLocalMatchday(t *testing.T) {
 	payload := MatchdayPayload{
@@ -51,5 +55,22 @@ func TestValidatePayloadRequiresRunID(t *testing.T) {
 
 	if err := validatePayload(payload); err == nil {
 		t.Fatal("expected missing run ID to be rejected")
+	}
+}
+
+func TestCorsAllowsConfiguredLoopbackOrigins(t *testing.T) {
+	handler := cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), "http://localhost:5173, http://127.0.0.1:5173")
+
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:5173"} {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		if got := response.Header().Get("Access-Control-Allow-Origin"); got != origin {
+			t.Fatalf("expected CORS origin %q, got %q", origin, got)
+		}
 	}
 }

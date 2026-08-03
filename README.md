@@ -20,6 +20,7 @@ A fast football management prototype focused on visible tactical consequences, s
 - Local save/reset through browser storage
 - Season rollover after the fixture list completes
 - Analytics Lab with selected-club match, event, replay-frame, and player-rating aggregates
+- Season Command Center with ClickHouse-backed round charts, historical league-table slider, match replay links, and player development deltas
 - Run-aware season sync with a stable career/season ID, progress feedback, standings snapshots, and player development snapshots for ClickStack exploration
 
 The 2026/27 Premier League roster snapshot is pinned in `src/game/premierLeagueData.ts`. Player names, positions, age, availability, and recent form inputs come from the Fantasy Premier League bootstrap feed captured on 2026-08-02; badge images use the API-Football crest CDN. OVR and potential are derived game ratings rather than official EA or Football Manager ratings. Match events, player ratings, and tactical outcomes remain simulated so the local demo is deterministic and can feed the ClickHouse and Iceberg pipeline without live-match credentials.
@@ -36,7 +37,7 @@ docker compose up --build
 
 The service listens on `http://localhost:8787`. The game still runs without the stack; the Analytics Lab will show an offline state until the service is available.
 
-ClickHouse 26.2 includes the embedded ClickStack UI. After a full season sync, open `http://localhost:8123/clickstack` from the Analytics Lab, copy the displayed career/season run ID into `analytics/clickstack-queries.sql`, and build the final-table, points-race, xG, player-development, event-volume, and replay-density charts over that isolated run. The custom pitch heatmap remains in Touchline.
+ClickHouse 26.2 includes the embedded ClickStack UI. After a full season sync, open `http://localhost:8123/clickstack` from the Analytics Lab, copy the displayed career/season run ID into `analytics/clickstack-queries.sql`, and build the final-table, season-story, points-race, xG, player-development, event-volume, and replay-density charts over that isolated run. The frontend reads the same round-level data from `/api/analytics/timeline`; the custom pitch heatmap remains in Touchline.
 
 ## Run
 

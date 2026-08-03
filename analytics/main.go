@@ -158,6 +158,63 @@ type AnalyticsSummary struct {
 	Source            string            `json:"source"`
 }
 
+type AnalyticsTimelinePoint struct {
+	Round          int32   `json:"round"`
+	Rank           int32   `json:"rank"`
+	Played         int32   `json:"played"`
+	Won            int32   `json:"won"`
+	Drawn          int32   `json:"drawn"`
+	Lost           int32   `json:"lost"`
+	GoalsFor       int32   `json:"goalsFor"`
+	GoalsAgainst   int32   `json:"goalsAgainst"`
+	GoalDifference int32   `json:"goalDifference"`
+	Points         int32   `json:"points"`
+	Form           string  `json:"form"`
+	XGFor          float64 `json:"xgFor"`
+	XGAgainst      float64 `json:"xgAgainst"`
+	Possession     float64 `json:"possession"`
+	ShotsFor       int32   `json:"shotsFor"`
+	ShotsAgainst   int32   `json:"shotsAgainst"`
+	Pressure       float64 `json:"pressure"`
+	Territory      float64 `json:"territory"`
+	Events         uint64  `json:"events"`
+	Frames         uint64  `json:"frames"`
+}
+
+type AnalyticsTimelineStanding struct {
+	Round          int32  `json:"round"`
+	ClubID         string `json:"clubId"`
+	Rank           int32  `json:"rank"`
+	Played         int32  `json:"played"`
+	Won            int32  `json:"won"`
+	Drawn          int32  `json:"drawn"`
+	Lost           int32  `json:"lost"`
+	GoalsFor       int32  `json:"goalsFor"`
+	GoalsAgainst   int32  `json:"goalsAgainst"`
+	GoalDifference int32  `json:"goalDifference"`
+	Points         int32  `json:"points"`
+	Form           string `json:"form"`
+}
+
+type AnalyticsDevelopmentPlayer struct {
+	PlayerID       string `json:"playerId"`
+	PlayerName     string `json:"playerName"`
+	Position       string `json:"position"`
+	OpeningOverall int32  `json:"openingOverall"`
+	Overall        int32  `json:"overall"`
+	Potential      int32  `json:"potential"`
+	Form           int32  `json:"form"`
+	Fitness        int32  `json:"fitness"`
+	Change         int32  `json:"change"`
+}
+
+type AnalyticsTimeline struct {
+	Points  []AnalyticsTimelinePoint     `json:"points"`
+	Table   []AnalyticsTimelineStanding  `json:"table"`
+	Players []AnalyticsDevelopmentPlayer `json:"players"`
+	Source  string                       `json:"source"`
+}
+
 type Store struct {
 	clickhouse driver.Conn
 	iceberg    *icebergWriter
@@ -183,6 +240,7 @@ func main() {
 	mux.HandleFunc("/health", store.handleHealth)
 	mux.HandleFunc("/ingest", store.handleIngest)
 	mux.HandleFunc("/api/analytics/summary", store.handleSummary)
+	mux.HandleFunc("/api/analytics/timeline", store.handleTimeline)
 
 	server := &http.Server{
 		Addr:              env("ANALYTICS_ADDR", ":8787"),
@@ -274,6 +332,23 @@ func (s *Store) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Store) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	clubID := r.URL.Query().Get("club_id")
+	runID := r.URL.Query().Get("run_id")
+	if clubID == "" || runID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "club_id and run_id are required"})
+		return
+	}
+
+	timeline, err := s.timeline(r.Context(), clubID, runID)
+	if err != nil {
+		log.Printf("timeline failed: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "analytics store unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
 }
 
 func (s *Store) ingest(ctx context.Context, payload MatchdayPayload) error {
@@ -438,6 +513,143 @@ func (s *Store) summary(ctx context.Context, clubID string, runID string) (Analy
 	}
 	summary.Source = "ClickHouse + Iceberg"
 	return summary, nil
+}
+
+func (s *Store) timeline(ctx context.Context, clubID string, runID string) (AnalyticsTimeline, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := ensureClickHouseSchema(ctx, s.clickhouse); err != nil {
+		return AnalyticsTimeline{}, err
+	}
+
+	timeline := AnalyticsTimeline{
+		Points:  []AnalyticsTimelinePoint{},
+		Table:   []AnalyticsTimelineStanding{},
+		Players: []AnalyticsDevelopmentPlayer{},
+		Source:  "ClickHouse + Iceberg",
+	}
+	pointRows, err := s.clickhouse.Query(ctx, `
+		WITH event_counts AS
+		(
+			SELECT e.run_id, e.season, e.round, count() AS events
+			FROM touchline_match_events_v2 AS e
+			INNER JOIN touchline_matches_v2 AS m
+				ON e.run_id = m.run_id AND e.season = m.season AND e.match_id = m.match_id
+			WHERE e.run_id = ? AND (m.home_id = ? OR m.away_id = ?)
+			GROUP BY e.run_id, e.season, e.round
+		), frame_counts AS
+		(
+			SELECT f.run_id, f.season, f.round, uniqExact(tuple(f.run_id, f.match_id, f.frame_index)) AS frames
+			FROM touchline_player_frames_v2 AS f
+			INNER JOIN touchline_matches_v2 AS m
+				ON f.run_id = m.run_id AND f.season = m.season AND f.match_id = m.match_id
+			WHERE f.run_id = ? AND (m.home_id = ? OR m.away_id = ?)
+			GROUP BY f.run_id, f.season, f.round
+		)
+		SELECT
+			toInt32(s.round), toInt32(s.rank), toInt32(s.played), toInt32(s.won), toInt32(s.drawn), toInt32(s.lost),
+			toInt32(s.goals_for), toInt32(s.goals_against), toInt32(s.goal_difference), toInt32(s.points), s.form,
+			round(coalesce(any(if(m.home_id = s.club_id, toFloat64(m.home_xg), toFloat64(m.away_xg))), 0.0), 2),
+			round(coalesce(any(if(m.home_id = s.club_id, toFloat64(m.away_xg), toFloat64(m.home_xg))), 0.0), 2),
+			round(coalesce(any(if(m.home_id = s.club_id, toFloat64(m.home_possession), 100.0 - toFloat64(m.home_possession))), 0.0), 1),
+			toInt32(coalesce(any(if(m.home_id = s.club_id, m.home_shots, m.away_shots)), 0)),
+			toInt32(coalesce(any(if(m.home_id = s.club_id, m.away_shots, m.home_shots)), 0)),
+			round(coalesce(any(if(m.home_id = s.club_id, toFloat64(m.home_pressure), toFloat64(m.away_pressure))), 0.0), 1),
+			round(coalesce(any(if(m.home_id = s.club_id, toFloat64(m.home_territory), 100.0 - toFloat64(m.home_territory))), 0.0), 1),
+			coalesce(event_counts.events, toUInt64(0)), coalesce(frame_counts.frames, toUInt64(0))
+		FROM (SELECT * FROM touchline_standings FINAL) AS s
+		LEFT JOIN touchline_matches_v2 AS m
+			ON m.run_id = s.run_id AND m.season = s.season AND m.round = s.round
+			AND (m.home_id = s.club_id OR m.away_id = s.club_id)
+		LEFT JOIN event_counts
+			ON event_counts.run_id = s.run_id AND event_counts.season = s.season AND event_counts.round = s.round
+		LEFT JOIN frame_counts
+			ON frame_counts.run_id = s.run_id AND frame_counts.season = s.season AND frame_counts.round = s.round
+		WHERE s.run_id = ? AND s.club_id = ?
+		GROUP BY
+			s.round, s.rank, s.played, s.won, s.drawn, s.lost, s.goals_for, s.goals_against,
+			s.goal_difference, s.points, s.form, event_counts.events, frame_counts.frames
+		ORDER BY s.round`, runID, clubID, clubID, runID, clubID, clubID, runID, clubID)
+	if err != nil {
+		return AnalyticsTimeline{}, err
+	}
+	for pointRows.Next() {
+		var point AnalyticsTimelinePoint
+		if err := pointRows.Scan(
+			&point.Round, &point.Rank, &point.Played, &point.Won, &point.Drawn, &point.Lost,
+			&point.GoalsFor, &point.GoalsAgainst, &point.GoalDifference, &point.Points, &point.Form,
+			&point.XGFor, &point.XGAgainst, &point.Possession, &point.ShotsFor, &point.ShotsAgainst,
+			&point.Pressure, &point.Territory, &point.Events, &point.Frames,
+		); err != nil {
+			pointRows.Close()
+			return AnalyticsTimeline{}, err
+		}
+		timeline.Points = append(timeline.Points, point)
+	}
+	if err := pointRows.Err(); err != nil {
+		pointRows.Close()
+		return AnalyticsTimeline{}, err
+	}
+	pointRows.Close()
+
+	tableRows, err := s.clickhouse.Query(ctx, `
+		SELECT toInt32(round), club_id, toInt32(rank), toInt32(played), toInt32(won), toInt32(drawn), toInt32(lost),
+			toInt32(goals_for), toInt32(goals_against), toInt32(goal_difference), toInt32(points), form
+		FROM touchline_standings FINAL
+		WHERE run_id = ?
+		ORDER BY round, rank`, runID)
+	if err != nil {
+		return AnalyticsTimeline{}, err
+	}
+	for tableRows.Next() {
+		var standing AnalyticsTimelineStanding
+		if err := tableRows.Scan(
+			&standing.Round, &standing.ClubID, &standing.Rank, &standing.Played, &standing.Won, &standing.Drawn,
+			&standing.Lost, &standing.GoalsFor, &standing.GoalsAgainst, &standing.GoalDifference, &standing.Points,
+			&standing.Form,
+		); err != nil {
+			tableRows.Close()
+			return AnalyticsTimeline{}, err
+		}
+		timeline.Table = append(timeline.Table, standing)
+	}
+	if err := tableRows.Err(); err != nil {
+		tableRows.Close()
+		return AnalyticsTimeline{}, err
+	}
+	tableRows.Close()
+
+	playerRows, err := s.clickhouse.Query(ctx, `
+		SELECT
+			player_id, any(player_name), any(position), toInt32(argMin(overall, round)), toInt32(argMax(overall, round)),
+			toInt32(argMax(potential, round)), toInt32(argMax(form, round)), toInt32(argMax(fitness, round)),
+			toInt32(argMax(overall, round) - argMin(overall, round))
+		FROM touchline_player_snapshots FINAL
+		WHERE run_id = ? AND club_id = ?
+		GROUP BY player_id
+		ORDER BY argMax(overall, round) - argMin(overall, round) DESC, argMax(overall, round) DESC
+		LIMIT 8`, runID, clubID)
+	if err != nil {
+		return AnalyticsTimeline{}, err
+	}
+	for playerRows.Next() {
+		var player AnalyticsDevelopmentPlayer
+		if err := playerRows.Scan(
+			&player.PlayerID, &player.PlayerName, &player.Position, &player.OpeningOverall, &player.Overall,
+			&player.Potential, &player.Form, &player.Fitness, &player.Change,
+		); err != nil {
+			playerRows.Close()
+			return AnalyticsTimeline{}, err
+		}
+		timeline.Players = append(timeline.Players, player)
+	}
+	if err := playerRows.Err(); err != nil {
+		playerRows.Close()
+		return AnalyticsTimeline{}, err
+	}
+	playerRows.Close()
+
+	return timeline, nil
 }
 
 func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
@@ -1230,9 +1442,17 @@ func matchResult(result MatchResult) string {
 }
 
 func cors(next http.Handler, allowedOrigin string) http.Handler {
+	allowedOrigins := make(map[string]struct{})
+	for _, origin := range strings.Split(allowedOrigin, ",") {
+		if trimmed := strings.TrimSpace(origin); trimmed != "" {
+			allowedOrigins[trimmed] = struct{}{}
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") == allowedOrigin {
-			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		origin := r.Header.Get("Origin")
+		if _, ok := allowedOrigins[origin]; ok {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")

@@ -1,4 +1,32 @@
 SELECT
+    s.run_id,
+    s.season,
+    s.round,
+    s.club_id,
+    s.rank,
+    s.played,
+    s.points,
+    s.goals_for,
+    s.goals_against,
+    s.goal_difference,
+    round(if(m.home_id = s.club_id, m.home_xg, m.away_xg), 2) AS xg_for,
+    round(if(m.home_id = s.club_id, m.away_xg, m.home_xg), 2) AS xg_against,
+    round(if(m.home_id = s.club_id, m.home_possession, 100 - m.home_possession), 1) AS possession,
+    if(m.home_id = s.club_id, m.home_shots, m.away_shots) AS shots_for,
+    if(m.home_id = s.club_id, m.away_shots, m.home_shots) AS shots_against,
+    if(m.home_id = s.club_id, m.home_pressure, m.away_pressure) AS pressure,
+    if(m.home_id = s.club_id, m.home_territory, 100 - m.home_territory) AS territory
+FROM (SELECT * FROM touchline_standings FINAL) AS s
+LEFT JOIN touchline_matches_v2 AS m
+    ON m.run_id = s.run_id
+   AND m.season = s.season
+   AND m.round = s.round
+   AND (m.home_id = s.club_id OR m.away_id = s.club_id)
+WHERE s.run_id = 'replace-with-run-id'
+  AND s.club_id = 'replace-with-club-id'
+ORDER BY s.round;
+
+SELECT
     run_id,
     season,
     round,
