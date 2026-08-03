@@ -171,3 +171,22 @@ WHERE run_id = 'replace-with-run-id'
   AND team_id = 'arsenal'
 GROUP BY run_id, season, round, match_id, team_id, player_id, x_bin, y_bin
 ORDER BY round, match_id, intensity DESC;
+
+SELECT
+    run_id,
+    season,
+    round,
+    club_id,
+    sum(matches) AS matches,
+    sum(goals_for) AS goals_for,
+    sum(goals_against) AS goals_against,
+    round(sum(xg_for), 2) AS xg_for,
+    round(sum(xg_against), 2) AS xg_against,
+    round(avg(possession), 1) AS possession,
+    round(avg(pressure), 1) AS pressure,
+    round(avg(territory), 1) AS territory
+FROM touchline_club_round_metrics
+WHERE run_id = 'replace-with-run-id'
+  AND club_id = 'replace-with-club-id'
+GROUP BY run_id, season, round, club_id
+ORDER BY round;

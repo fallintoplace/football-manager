@@ -27,7 +27,7 @@ The 2026/27 Premier League roster snapshot is pinned in `src/game/premierLeagueD
 
 ## Analytics Stack
 
-The optional local data stack receives each simulated matchday from the browser. The analytics service preserves match, event, player-rating, spatial replay, standings, and player-development streams. It uses Arrow-shaped batches for Iceberg writes, ClickHouse for low-latency aggregates, Iceberg REST for table metadata, and MinIO for the warehouse.
+The optional local data stack receives each simulated matchday from the browser. The analytics service preserves match, event, player-rating, spatial replay, standings, and player-development streams. It uses Arrow-shaped batches for Iceberg writes, ClickHouse for low-latency aggregates, a run-aware materialized-view lab for club-round metrics, Iceberg REST for table metadata, and MinIO for the warehouse.
 
 Start it from the project root:
 
@@ -38,6 +38,10 @@ docker compose up --build
 The service listens on `http://localhost:8787`. The game still runs without the stack; the Analytics Lab will show an offline state until the service is available.
 
 ClickHouse 26.2 includes the embedded ClickStack UI. After a full season sync, open `http://localhost:8123/clickstack` from the Analytics Lab, copy the displayed career/season run ID into `analytics/clickstack-queries.sql`, and build the final-table, season-story, points-race, xG, player-development, event-volume, and replay-density charts over that isolated run. The frontend reads the same round-level data from `/api/analytics/timeline`; the custom pitch heatmap remains in Touchline.
+
+For the ClickHouse learning lab, replace the same placeholders in `analytics/performance-lab.sql`. Run it with `docker compose exec -T clickhouse clickhouse-client --password clickhouse --multiquery < analytics/performance-lab.sql` after backfilling `touchline_club_round_metrics` for the selected run. The lab compares raw match facts with the materialized-view path, records query-log metrics, shows index pruning, and inspects parts, merges, and data types.
+
+The scale experiment is run with `analytics/scale-lab.sql`; it replaces only `scale-lab-*` rows and generates 20 copies of the selected season. `analytics/clickstack-alerts.sql` contains the xG-underperformance alert query. In local ClickStack, the dashboard supports a global SQL `WHERE` filter, so the saved Touchline Season Command Center uses `run_id` and `club_id` without changing tile SQL; the local banner notes that alert scheduling is not included in this build.
 
 ## Run
 

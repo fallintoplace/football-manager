@@ -438,7 +438,7 @@ func (s *Store) hasCompleteMatch(ctx context.Context, runID string, result Match
 }
 
 func clearClickHouseMatch(ctx context.Context, conn driver.Conn, runID string, matchID string) error {
-	for _, tableName := range []string{"touchline_matches_v2", "touchline_match_events_v2", "touchline_player_frames_v2", "touchline_player_ratings_v2"} {
+	for _, tableName := range []string{"touchline_matches_v2", "touchline_club_round_metrics", "touchline_match_events_v2", "touchline_player_frames_v2", "touchline_player_ratings_v2"} {
 		statement := fmt.Sprintf("ALTER TABLE %s DELETE WHERE run_id = ? AND match_id = ? SETTINGS mutations_sync = 2", tableName)
 		if err := conn.Exec(ctx, statement, runID, matchID); err != nil {
 			return err
@@ -684,6 +684,43 @@ func ensureClickHouseSchema(ctx context.Context, conn driver.Conn) error {
 			result String,
 			ingested_at DateTime64(3) DEFAULT now64(3)
 		) ENGINE = MergeTree ORDER BY (run_id, season, round, match_id)`,
+		`CREATE TABLE IF NOT EXISTS touchline_club_round_metrics (
+			run_id String,
+			match_id String,
+			season UInt32,
+			round UInt32,
+			club_id String,
+			matches UInt64,
+			goals_for UInt64,
+			goals_against UInt64,
+			xg_for Float64,
+			xg_against Float64,
+			shots_for UInt64,
+			shots_against UInt64,
+			possession Float64,
+			pressure Float64,
+			territory Float64,
+			ingested_at DateTime64(3) DEFAULT now64(3)
+		) ENGINE = SummingMergeTree ORDER BY (run_id, season, club_id, round, match_id)`,
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS touchline_club_round_metrics_mv
+		TO touchline_club_round_metrics
+		AS SELECT
+			run_id,
+			match_id,
+			season,
+			round,
+			arrayJoin([home_id, away_id]) AS club_id,
+			toUInt64(1) AS matches,
+			if(club_id = home_id, toUInt64(home_goals), toUInt64(away_goals)) AS goals_for,
+			if(club_id = home_id, toUInt64(away_goals), toUInt64(home_goals)) AS goals_against,
+			if(club_id = home_id, toFloat64(home_xg), toFloat64(away_xg)) AS xg_for,
+			if(club_id = home_id, toFloat64(away_xg), toFloat64(home_xg)) AS xg_against,
+			if(club_id = home_id, toUInt64(home_shots), toUInt64(away_shots)) AS shots_for,
+			if(club_id = home_id, toUInt64(away_shots), toUInt64(home_shots)) AS shots_against,
+			if(club_id = home_id, toFloat64(home_possession), 100.0 - toFloat64(home_possession)) AS possession,
+			if(club_id = home_id, toFloat64(home_pressure), toFloat64(away_pressure)) AS pressure,
+			if(club_id = home_id, toFloat64(home_territory), 100.0 - toFloat64(home_territory)) AS territory
+		FROM touchline_matches_v2`,
 		`CREATE TABLE IF NOT EXISTS touchline_match_events_v2 (
 			run_id String,
 			event_key String,
